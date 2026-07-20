@@ -1,4 +1,4 @@
-# LabPlotter 0.5.1
+# LabPlotter 0.6.0
 
 FTIR, NanoDrop UV–Vis, ZetaSizer 데이터를 로컬에서 불러와 Origin 스타일로 플롯하고 비교하는 Windows 데스크톱 앱입니다. 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
@@ -114,9 +114,9 @@ OCR 결과는 편집을 돕는 초안입니다. 소수점·음수 부호·단위
 
 인터넷은 첫 패키지 설치에만 필요합니다. 측정 데이터 처리와 library 사용은 완전히 로컬입니다.
 
-## 0.3.0 이후 패치 업데이트
+## 누적 패치 업데이트
 
-0.3.0은 한 번 새 폴더에 설치해야 합니다. 이후 일반적인 기능 추가와 UI 수정은 전체 폴더를 다시 받지 않고, 전달받은 `.labpatch` 파일만 적용할 수 있습니다.
+0.6.0부터는 format-2 누적 스냅샷을 지원합니다. 누적 패치 하나에 목표 버전의 관리 대상 파일과 Python dependency 정보가 모두 포함되므로, 지원되는 구버전에서 중간 패치를 순서대로 설치하지 않고 최신 버전으로 이동할 수 있습니다.
 
 이 패치 방식은 `run_labplotter.bat`로 실행하는 표준 설치본용입니다. 선택적으로 직접 만든 PyInstaller EXE 배포본은 실행 파일의 묶음 구조가 달라 별도의 전체 빌드로 갱신합니다.
 
@@ -126,7 +126,9 @@ OCR 결과는 편집을 돕는 초안입니다. 소수점·음수 부호·단위
 4. 변경 대상 파일을 `.updates\backups`에 백업한 다음 패치를 적용하고 실행 가능 여부를 검사합니다.
 5. 성공하면 새 버전으로 자동 재실행됩니다. 실패하면 기존 버전을 자동 복원합니다.
 
-`.labpatch`는 직접 압축 해제하지 않습니다. 패치는 지정된 LabPlotter 파일만 바꿀 수 있으며 측정 원본, particle library, custom format profile은 건드리지 않습니다. Python dependency가 바뀐 패치만 기존 `.venv`에 필요한 package를 추가/갱신하며, 변경 전 package 버전 목록도 롤백용으로 보존합니다. DB 구조 변경이 선언된 패치는 적용 전에 particle library도 함께 백업합니다.
+`.labpatch`는 직접 압축 해제하지 않습니다. 패치는 지정된 LabPlotter 관리 파일만 바꿀 수 있으며 측정 원본, particle library, custom format profile과 사용자가 추가한 알 수 없는 파일은 건드리지 않습니다. 누적 패치는 목표 버전의 dependency를 확인하고 기존 `.venv`에 필요한 package를 추가·갱신합니다. 변경 전 package 버전 목록과 DB 구조 변경 전 particle library도 롤백용으로 보존합니다.
+
+0.5.1 이하의 업데이트기는 format-2 누적 패치를 직접 읽을 수 없습니다. 이런 구버전에서는 GitHub에서 `update_to_latest.bat` 하나를 LabPlotter 폴더에 내려받아 실행합니다. 이 부트스트랩 실행기가 최신 업데이트기와 누적 패치를 받은 뒤 동일한 백업·검증·자동 롤백 절차로 최신 버전까지 한 번에 이동시킵니다. 0.6.0 이후에는 앱 내부 Update Center만 사용하면 됩니다.
 
 앱이 열리지 않는 상태에서도 다음 보조 실행기를 사용할 수 있습니다.
 

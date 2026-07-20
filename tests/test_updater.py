@@ -4,9 +4,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch as mock_patch
 
-from tools.make_labpatch import build_patch
+from tools.make_labpatch import build_patch, build_snapshot_patch
 from updater import UpdateError, apply_labpatch, available_backups, rollback_backup
 
 
@@ -20,6 +21,7 @@ def write_install(root: Path, version: str, value: str, include_obsolete: bool =
         f'__version__ = "{version}"\n', encoding="utf-8"
     )
     (package / "value.py").write_text(f'VALUE = "{value}"\n', encoding="utf-8")
+    (root / "requirements.txt").write_text("", encoding="utf-8")
     if include_obsolete:
         (package / "obsolete.py").write_text("OBSOLETE = True\n", encoding="utf-8")
 
@@ -83,6 +85,34 @@ class UpdaterTests(unittest.TestCase):
             self.assertIn('"old"', (installed / "labplotter" / "value.py").read_text())
             self.assertTrue((installed / "labplotter" / "obsolete.py").exists())
             self.assertFalse(available_backups(installed))
+
+    def test_cumulative_snapshot_updates_multiple_versions_and_rolls_back(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            target = temporary / "target"
+            write_install(target, "0.6.0", "latest")
+            patch = temporary / "latest.labpatch"
+            manifest = build_snapshot_patch(target, "0.6.0", patch, obsolete_paths=["labplotter/obsolete.py"])
+            self.assertEqual(manifest["format_version"], 2)
+            self.assertEqual(manifest["from_versions"], ["*"])
+
+            for version in ("0.3.0", "0.4.7", "0.5.1"):
+                installed = temporary / f"installed-{version}"
+                write_install(installed, version, "old", include_obsolete=True)
+                local_file = installed / "labplotter" / "local_notes.py"
+                local_file.write_text("KEEP = True\n", encoding="utf-8")
+                completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+                with mock_patch("updater.subprocess.run", return_value=completed):
+                    result = apply_labpatch(patch, installed, run_smoke=False)
+                    self.assertEqual(result["to_version"], "0.6.0")
+                    self.assertIn('"latest"', (installed / "labplotter" / "value.py").read_text())
+                    self.assertFalse((installed / "labplotter" / "obsolete.py").exists())
+                    self.assertTrue(local_file.exists())
+                    restored = rollback_backup(installed, Path(result["backup"]))
+                self.assertEqual(restored, version)
+                self.assertIn('"old"', (installed / "labplotter" / "value.py").read_text())
+                self.assertTrue((installed / "labplotter" / "obsolete.py").exists())
+                self.assertTrue(local_file.exists())
 
 
 if __name__ == "__main__":

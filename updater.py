@@ -20,13 +20,14 @@ from typing import Callable
 from labplotter.i18n import tr
 
 
-PATCH_FORMAT = 1
+PATCH_FORMATS = {1, 2}
+UPDATER_VERSION = 2
 PRODUCT = "LabPlotter"
 ALLOWED_DIRECTORIES = {"labplotter", "tools", "tests"}
 ALLOWED_ROOT_FILES = {
-    "README_KO.md", "requirements.txt", "requirements-build.txt", "pyproject.toml", "version.json",
+    "README.md", "README_KO.md", "CHANGELOG.md", "requirements.txt", "requirements-build.txt", "pyproject.toml", "version.json",
     "run_labplotter.bat", "build_windows.bat", "apply_update.bat",
-    "rollback_last_update.bat", "launcher.py", "updater.py",
+    "rollback_last_update.bat", "update_to_latest.bat", "launcher.py", "updater.py",
 }
 IGNORED_PARTS = {"__pycache__", ".venv", ".buildvenv", ".updates", "build", "dist"}
 
@@ -82,7 +83,7 @@ def read_manifest(archive: zipfile.ZipFile) -> dict:
         raise UpdateError(tr("The patch does not contain manifest.json.")) from exc
     except Exception as exc:
         raise UpdateError(tr("Invalid manifest.json: {error}", error=exc)) from exc
-    if manifest.get("format_version") != PATCH_FORMAT:
+    if manifest.get("format_version") not in PATCH_FORMATS:
         raise UpdateError(tr("Unsupported patch format: {format}", format=manifest.get("format_version")))
     if manifest.get("product") != PRODUCT:
         raise UpdateError(tr("This patch is not for LabPlotter."))
@@ -90,12 +91,18 @@ def read_manifest(archive: zipfile.ZipFile) -> dict:
         raise UpdateError(tr("Patch version metadata is incomplete."))
     if not isinstance(manifest.get("files", []), list) or not isinstance(manifest.get("delete", []), list):
         raise UpdateError(tr("Patch file lists are invalid."))
+    if manifest.get("format_version") == 2:
+        if manifest.get("mode") != "snapshot" or manifest.get("from_versions") != ["*"]:
+            raise UpdateError(tr("Invalid cumulative snapshot metadata."))
+        if not isinstance(manifest.get("managed_paths"), list):
+            raise UpdateError(tr("Invalid cumulative snapshot metadata."))
     return manifest
 
 
 def _validate_patch_contents(archive: zipfile.ZipFile, manifest: dict, app_root: Path) -> list[tuple[dict, Path, bytes]]:
     output = []
     seen = set()
+    snapshot = manifest.get("format_version") == 2 and manifest.get("mode") == "snapshot"
     for entry in manifest.get("files", []):
         if not isinstance(entry, dict) or not all(key in entry for key in ("path", "sha256", "size")):
             raise UpdateError(tr("A patch file entry is incomplete."))
@@ -111,16 +118,22 @@ def _validate_patch_contents(archive: zipfile.ZipFile, manifest: dict, app_root:
         if len(data) != int(entry["size"]) or sha256_bytes(data) != entry["sha256"]:
             raise UpdateError(tr("Checksum validation failed: {path}", path=normalized))
         destination = app_root / relative
-        old_hash = entry.get("old_sha256")
-        if old_hash is None:
-            if destination.exists():
-                raise UpdateError(tr("Patch expected a new file, but it already exists: {path}", path=normalized))
-        elif not destination.exists() or sha256_file(destination) != old_hash:
-            raise UpdateError(tr("Installed file differs from the expected base version: {path}", path=normalized))
+        if not snapshot:
+            old_hash = entry.get("old_sha256")
+            if old_hash is None:
+                if destination.exists():
+                    raise UpdateError(tr("Patch expected a new file, but it already exists: {path}", path=normalized))
+            elif not destination.exists() or sha256_file(destination) != old_hash:
+                raise UpdateError(tr("Installed file differs from the expected base version: {path}", path=normalized))
         output.append((entry, relative, data))
 
+    if snapshot:
+        managed = [validate_relative_path(str(path)).as_posix() for path in manifest.get("managed_paths", [])]
+        if len(managed) != len(set(managed)) or set(managed) != seen:
+            raise UpdateError(tr("Cumulative snapshot file inventory is incomplete."))
+
     for entry in manifest.get("delete", []):
-        if not isinstance(entry, dict) or "path" not in entry or "old_sha256" not in entry:
+        if not isinstance(entry, dict) or "path" not in entry or (not snapshot and "old_sha256" not in entry):
             raise UpdateError(tr("A delete entry is incomplete."))
         relative = validate_relative_path(str(entry["path"]))
         normalized = relative.as_posix()
@@ -128,7 +141,7 @@ def _validate_patch_contents(archive: zipfile.ZipFile, manifest: dict, app_root:
             raise UpdateError(tr("A path cannot be replaced and deleted together: {path}", path=normalized))
         seen.add(normalized)
         destination = app_root / relative
-        if not destination.exists() or sha256_file(destination) != entry["old_sha256"]:
+        if not snapshot and (not destination.exists() or sha256_file(destination) != entry["old_sha256"]):
             raise UpdateError(tr("File scheduled for deletion differs from the expected base: {path}", path=normalized))
     return output
 
@@ -323,7 +336,8 @@ def apply_labpatch(
         with zipfile.ZipFile(patch_path) as archive:
             manifest = read_manifest(archive)
             current = read_current_version(app_root)
-            if current not in [str(v) for v in manifest["from_versions"]]:
+            cumulative = manifest.get("format_version") == 2 and manifest.get("mode") == "snapshot"
+            if not cumulative and current not in [str(v) for v in manifest["from_versions"]]:
                 raise UpdateError(tr("This patch accepts {versions}, but the installed version is {current}.", versions=", ".join(manifest["from_versions"]), current=current))
             if str(manifest["to_version"]) == current:
                 raise UpdateError(tr("This patch is already installed."))
