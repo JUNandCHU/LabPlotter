@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "labplotter"
+version = "0.5.1"
+description = "Local scientific plotting workbench for FTIR, NanoDrop, ssNMR and ZetaSizer exports"
+readme = "README_KO.md"
+requires-python = ">=3.10"
+dependencies = [
+  "matplotlib>=3.8",
+  "numpy>=1.26",
+  "openpyxl>=3.1",
+  "Pillow>=10",
+  "scipy>=1.11",
+  "rapidocr==3.9.1",
+  "onnxruntime>=1.18,<2",
+]
+
+[project.scripts]
+labplotter = "labplotter.app:main"
+
+[tool.setuptools.packages.find]
+include = ["labplotter*"]
