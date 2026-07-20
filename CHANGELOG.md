@@ -3,7 +3,7 @@
 ## 0.6.0 — development
 
 - Added format-2 cumulative snapshot patches that overwrite the complete managed target inventory while preserving unknown local files.
-- Added version-independent backup, dependency reconciliation, smoke validation, and rollback for cumulative updates.
+- Added version-independent backup, dependency reconciliation, smoke validation, and rollback for cumulative updates, including recognized legacy folders without `version.json`.
 - Added `update_to_latest.bat` as a legacy bootstrap path that downloads the current updater and latest cumulative patch from GitHub.
 - Kept format-1 incremental patch compatibility.
 - Added multi-version cumulative update and rollback tests.

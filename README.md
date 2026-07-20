@@ -23,7 +23,7 @@ python -m unittest discover -s tests -v
 
 ## Updates
 
-Use `Updates…` inside LabPlotter to apply a verified `.labpatch`. Format-2 cumulative snapshots can move any patch-enabled installation directly to the target release. For legacy installations, place `update_to_latest.bat` in the LabPlotter folder and run it once to download the current updater and latest cumulative snapshot. Application files, Python dependencies, and database migrations are backed up before installation and restored automatically when validation fails.
+Use `Updates…` inside LabPlotter to apply a verified `.labpatch`. Format-2 cumulative snapshots can move any recognized LabPlotter installation directly to the target release. For legacy installations—even releases without `version.json`—place `update_to_latest.bat` in the LabPlotter folder and run it once to download the current updater and latest cumulative snapshot. Application files, Python dependencies, and database migrations are backed up before installation and restored automatically when validation fails.
 
 ## Contact
 

@@ -65,9 +65,11 @@ def validate_relative_path(value: str) -> Path:
     return Path(*pure.parts)
 
 
-def read_current_version(app_root: Path) -> str:
+def read_current_version(app_root: Path, allow_legacy: bool = False) -> str:
     path = app_root / "version.json"
     if not path.exists():
+        if allow_legacy and (app_root / "labplotter").is_dir() and (app_root / "run_labplotter.bat").is_file():
+            return "legacy"
         raise UpdateError(tr("version.json is missing; this installation cannot accept .labpatch files."))
     try:
         value = json.loads(path.read_text(encoding="utf-8"))["version"]
@@ -153,11 +155,11 @@ def _app_data_dir() -> Path:
     return Path.home() / ".local" / "share" / PRODUCT
 
 
-def _backup_installation(app_root: Path, manifest: dict, files: list[tuple[dict, Path, bytes]]) -> Path:
+def _backup_installation(app_root: Path, manifest: dict, files: list[tuple[dict, Path, bytes]], current: str | None = None) -> Path:
     updates = app_root / ".updates"
     backups = updates / "backups"
     backups.mkdir(parents=True, exist_ok=True)
-    current = read_current_version(app_root)
+    current = current or read_current_version(app_root)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     backup = backups / f"{stamp}_{current}_to_{manifest['to_version']}"
     file_backup = backup / "files"
@@ -335,14 +337,14 @@ def apply_labpatch(
         log(tr("Validating {name}…", name=patch_path.name))
         with zipfile.ZipFile(patch_path) as archive:
             manifest = read_manifest(archive)
-            current = read_current_version(app_root)
             cumulative = manifest.get("format_version") == 2 and manifest.get("mode") == "snapshot"
+            current = read_current_version(app_root, allow_legacy=cumulative)
             if not cumulative and current not in [str(v) for v in manifest["from_versions"]]:
                 raise UpdateError(tr("This patch accepts {versions}, but the installed version is {current}.", versions=", ".join(manifest["from_versions"]), current=current))
             if str(manifest["to_version"]) == current:
                 raise UpdateError(tr("This patch is already installed."))
             files = _validate_patch_contents(archive, manifest, app_root)
-            backup = _backup_installation(app_root, manifest, files)
+            backup = _backup_installation(app_root, manifest, files, current)
             staging = Path(tempfile.mkdtemp(prefix="staging_", dir=app_root / ".updates"))
             for _entry, relative, data in files:
                 destination = staging / relative

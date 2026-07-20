@@ -22,6 +22,7 @@ def write_install(root: Path, version: str, value: str, include_obsolete: bool =
     )
     (package / "value.py").write_text(f'VALUE = "{value}"\n', encoding="utf-8")
     (root / "requirements.txt").write_text("", encoding="utf-8")
+    (root / "run_labplotter.bat").write_text("@echo off\n", encoding="utf-8")
     if include_obsolete:
         (package / "obsolete.py").write_text("OBSOLETE = True\n", encoding="utf-8")
 
@@ -96,9 +97,12 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(manifest["format_version"], 2)
             self.assertEqual(manifest["from_versions"], ["*"])
 
-            for version in ("0.3.0", "0.4.7", "0.5.1"):
+            for version in ("legacy", "0.3.0", "0.4.7", "0.5.1"):
                 installed = temporary / f"installed-{version}"
-                write_install(installed, version, "old", include_obsolete=True)
+                original_version = "0.1.1" if version == "legacy" else version
+                write_install(installed, original_version, "old", include_obsolete=True)
+                if version == "legacy":
+                    (installed / "version.json").unlink()
                 local_file = installed / "labplotter" / "local_notes.py"
                 local_file.write_text("KEEP = True\n", encoding="utf-8")
                 completed = SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -113,6 +117,7 @@ class UpdaterTests(unittest.TestCase):
                 self.assertIn('"old"', (installed / "labplotter" / "value.py").read_text())
                 self.assertTrue((installed / "labplotter" / "obsolete.py").exists())
                 self.assertTrue(local_file.exists())
+                self.assertEqual((installed / "version.json").exists(), version != "legacy")
 
 
 if __name__ == "__main__":
