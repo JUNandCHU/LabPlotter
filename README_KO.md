@@ -1,4 +1,4 @@
-# LabPlotter 0.6.0
+# LabPlotter 0.7.0
 
 FTIR, NanoDrop UV–Vis, ZetaSizer 데이터를 로컬에서 불러와 Origin 스타일로 플롯하고 비교하는 Windows 데스크톱 앱입니다. 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
@@ -66,12 +66,19 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 - A:B, C:D, E:F를 measurement 1–3으로 연결
 - sheet 이름의 `Cell_N` 정보를 metadata로 저장
 - particle 이름별로 DLS/Zeta triplicate를 로컬 SQLite library에 저장
-- DLS와 zeta-potential 그래프를 좌우에 동시에 표시
-- 여러 particle을 선택해 두 그래프에서 다음 방식으로 비교
+- 메인 탭 왼쪽은 현재 그래프에 포함된 particle 이름, 평균 Z-average, 평균 zeta potential만 표시하고 추가/제거에 사용
+- 전체 라이브러리는 별도의 크기 조절 가능한 창에서 source, batch alias, DLS/Zeta replicate 수, OCR 자동/검수/실패 상태와 OCR 필드를 함께 확인
+- DLS, zeta-potential, batch별 Z-average, batch별 평균 zeta potential을 2×2 대시보드로 동시에 표시
+- 여러 particle을 선택해 distribution 그래프에서 다음 방식으로 비교
   - Mean ± SD
   - Mean + replicate curves
   - Replicates only
 - DLS log-X 토글
+- 단일 particle에서는 DLS 최대 intensity의 diameter와 zeta 최대 count의 potential을 기본 표시하며, 여러 particle에서도 사용자가 명시적으로 활성화 가능
+- 자동 peak 레이블은 저장/클립보드에서 annotation과 같은 방식으로 포함 여부를 선택
+- 통합문서를 가져오면 embedded result table을 즉시 로컬 OCR로 읽고 라이브러리에 자동 초안으로 저장
+- OCR의 Z-Average와 Zeta Potential 평균을 반복 측정별로 모아 batch bar chart의 mean/median, SD/SEM error bar를 계산
+- `241101_JM10A_AMP`는 `JM10A`, `JM38B_Cell_No_6`은 `JM38B`로 자동 축약하고 각 bar graph 설정에서 source와 함께 batch 이름을 직접 편집
 - 확대된 행 높이, 가로/세로 스크롤, 드래그 가능한 패널 구분선
 - 이름·업데이트 시각·DLS/Zeta 측정 수·검수된 OCR 수·원본별 정렬 및 기본 정렬 복원
 - 선택한 particle과 연결된 모든 측정값을 확인 후 library에서 삭제
@@ -79,9 +86,9 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 - 현재 measurement의 표 이미지를 로컬 RapidOCR로 읽어 `DLS_OCR`/`Zeta_OCR` 검수 탭 생성
 - 검수 탭에서 원본 이미지를 왼쪽, 편집 가능한 OCR 표를 오른쪽에 나란히 표시
 - OCR이 놓친 행을 추가하거나 마지막 행을 제거하고 모든 셀을 직접 수정 가능
-- 사용자가 원본과 대조했다는 확인을 거친 결과만 particle library에 별도로 저장
+- 자동 OCR 초안을 라이브러리에 먼저 저장하고, 사용자가 원본과 대조·수정한 결과는 `reviewed` 상태로 갱신
 
-OCR 결과는 편집을 돕는 초안입니다. 소수점·음수 부호·단위가 잘못 인식될 수 있으므로 저장 전에 반드시 왼쪽 원본 이미지와 대조해야 합니다. OCR은 외부 서버를 사용하지 않으며, 저장 전에는 라이브러리 데이터가 변경되지 않습니다. 이미지와 raw curve의 replicate 연결도 그대로 보존됩니다.
+OCR 결과는 편집을 돕는 초안입니다. 소수점·음수 부호·단위가 잘못 인식될 수 있으므로 논문용 수치로 사용하기 전에 반드시 원본 이미지와 대조해야 합니다. OCR은 외부 서버를 사용하지 않으며 이미지, OCR 표와 raw curve의 replicate 연결을 그대로 보존합니다.
 
 ### 그래프와 custom format
 
@@ -126,7 +133,9 @@ OCR 결과는 편집을 돕는 초안입니다. 소수점·음수 부호·단위
 4. 변경 대상 파일을 `.updates\backups`에 백업한 다음 패치를 적용하고 실행 가능 여부를 검사합니다.
 5. 성공하면 새 버전으로 자동 재실행됩니다. 실패하면 기존 버전을 자동 복원합니다.
 
-`.labpatch`는 직접 압축 해제하지 않습니다. 패치는 지정된 LabPlotter 관리 파일만 바꿀 수 있으며 측정 원본, particle library, custom format profile과 사용자가 추가한 알 수 없는 파일은 건드리지 않습니다. 누적 패치는 목표 버전의 dependency를 확인하고 기존 `.venv`에 필요한 package를 추가·갱신합니다. 변경 전 package 버전 목록과 DB 구조 변경 전 particle library도 롤백용으로 보존합니다.
+`.labpatch`는 직접 압축 해제하지 않습니다. 패치는 지정된 LabPlotter 관리 파일만 바꿀 수 있으며 측정 원본, custom format profile과 사용자가 추가한 알 수 없는 파일은 건드리지 않습니다. Particle library는 일반 패치에서는 유지되고, 초기화가 명시된 특별 migration 패치에서만 백업 후 초기화됩니다. 누적 패치는 목표 버전의 dependency를 확인하고 기존 `.venv`에 필요한 package를 추가·갱신합니다. 변경 전 package 버전 목록과 DB 구조 변경 전 particle library도 롤백용으로 보존합니다.
+
+0.7.0 패치는 새 자동 OCR 라이브러리 구조를 일관되게 만들기 위해 기존 `particle_library.sqlite3`를 백업한 뒤 초기화합니다. 기존 ZetaSizer workbook을 다시 가져오면 result table OCR까지 자동 수행됩니다. 업데이트 직전 상태로 롤백하면 백업된 기존 라이브러리도 함께 복원됩니다. 이 초기화는 0.7.0 전환에만 적용되는 일회성 작업입니다.
 
 0.5.1 이하의 업데이트기는 format-2 누적 패치를 직접 읽을 수 없습니다. 이런 구버전에서는 GitHub에서 `update_to_latest.bat` 하나를 LabPlotter 폴더에 내려받아 실행합니다. 이 부트스트랩 실행기가 최신 업데이트기와 누적 패치를 받은 뒤 동일한 백업·검증·자동 롤백 절차로 최신 버전까지 한 번에 이동시킵니다. 0.6.0 이후에는 앱 내부 Update Center만 사용하면 됩니다.
 

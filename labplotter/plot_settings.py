@@ -44,6 +44,11 @@ class PlotSettingsWindow(tk.Toplevel):
         notebook.add(fonts, text=tr("Fonts and colors"))
         self._build_axes(axes)
         self._build_fonts(fonts)
+        self.extension = getattr(self.pane, "settings_extension", None)
+        if self.extension is not None:
+            extra = ttk.Frame(notebook, padding=10)
+            notebook.add(extra, text=tr(self.extension.title))
+            self.extension.build(extra)
         self._connect_live_preview()
         language_manager.subscribe(self.language_changed)
         localize_widget_tree(self)
@@ -183,12 +188,22 @@ class PlotSettingsWindow(tk.Toplevel):
         for variable in self.pane.vars.values():
             token = variable.trace_add("write", self._changed)
             self._traces.append((variable, token))
+        if self.extension is not None:
+            for variable in self.extension.variables():
+                token = variable.trace_add("write", self._extension_changed)
+                self._traces.append((variable, token))
 
     def _changed(self, *_args):
         if self.live.get():
             self.after_idle(self.pane.refresh)
 
+    def _extension_changed(self, *_args):
+        if self.live.get():
+            self.after_idle(self.extension.apply)
+
     def apply(self):
+        if self.extension is not None:
+            self.extension.apply()
         self.pane.refresh()
 
     def restore_defaults(self):
@@ -196,6 +211,8 @@ class PlotSettingsWindow(tk.Toplevel):
         self.live.set(False)
         try:
             self.pane.restore_defaults()
+            if self.extension is not None:
+                self.extension.restore_defaults()
         finally:
             self.live.set(live)
         self.pane.refresh()

@@ -3,9 +3,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 import ctypes
+import sqlite3
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
@@ -19,7 +21,8 @@ from labplotter.models import ZetaMeasurement
 from labplotter.parsers import detect_builtin_kind
 from labplotter.plotting import PlotOptions, apply_origin_style, font_family_for_text
 from labplotter.processing import asls_baseline, estimate_ftir_baseline, mean_curve, normalize, process_ftir
-from labplotter.storage import FormatProfileStore, ParticleLibrary
+from labplotter.storage import FormatProfileStore, ParticleLibrary, default_particle_label
+from labplotter.ui import ZetaTab
 
 
 class ProcessingTests(unittest.TestCase):
@@ -117,6 +120,45 @@ class StorageTests(unittest.TestCase):
             library.delete_particles(["Sample"])
             self.assertIsNone(library.ocr_result("Sample", "DLS", 1))
 
+    def test_automatic_ocr_summaries_and_batch_labels(self):
+        with tempfile.TemporaryDirectory() as temp:
+            library = ParticleLibrary(Path(temp) / "library.sqlite3")
+            measurements = []
+            for replicate in (1, 2, 3):
+                measurements.extend((
+                    ZetaMeasurement("241101_JM10A_AMP", "DLS", replicate, np.array([1, 2]), np.array([3, 4]), "a.xlsx", "A"),
+                    ZetaMeasurement("241101_JM10A_AMP", "Zeta", replicate, np.array([-1, 1]), np.array([3, 4]), "a.xlsx", "A"),
+                ))
+            library.import_measurements(measurements)
+            for replicate, (z_average, zeta) in enumerate(((100, -20), (110, -22), (120, -24)), start=1):
+                library.save_ocr_result("241101_JM10A_AMP", "DLS", replicate, OCR_COLUMNS,
+                    [["Z-Average (d.nm)", str(z_average), "", "", "", ""]], [[0.99] * 6], "test", reviewed=False)
+                library.save_ocr_result("241101_JM10A_AMP", "Zeta", replicate, OCR_COLUMNS,
+                    [["Zeta Potential (mV)", str(zeta), "", "", "", ""]], [[0.99] * 6], "test", reviewed=False)
+            row = library.particles()[0]
+            self.assertEqual(default_particle_label(row["name"]), "JM10A")
+            self.assertEqual(row["plot_label"], "JM10A")
+            self.assertAlmostEqual(row["dls_z_mean"], 110)
+            self.assertAlmostEqual(row["dls_z_sd"], 10)
+            self.assertAlmostEqual(row["zeta_average_mean"], -22)
+            self.assertEqual(row["ocr_auto"], 6)
+            library.set_plot_label(row["name"], "Custom batch")
+            self.assertEqual(library.particles()[0]["plot_label"], "Custom batch")
+
+    def test_pre_070_library_is_reset_once_and_new_database_is_stamped(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "library.sqlite3"
+            with sqlite3.connect(path) as con:
+                con.execute("CREATE TABLE legacy_particle(name TEXT)")
+                con.execute("INSERT INTO legacy_particle VALUES('old')")
+            library = ParticleLibrary(path)
+            with library.connect() as con:
+                self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], ParticleLibrary.SCHEMA_GENERATION)
+                self.assertIsNone(con.execute("SELECT name FROM sqlite_master WHERE name='legacy_particle'").fetchone())
+            library.import_measurements([ZetaMeasurement("Keep", "DLS", 1, np.array([1]), np.array([2]), "a.xlsx", "A")])
+            reopened = ParticleLibrary(path)
+            self.assertEqual(reopened.particles()[0]["name"], "Keep")
+
 
 class OCRTests(unittest.TestCase):
     def test_tokens_are_mapped_to_editable_table_columns(self):
@@ -129,6 +171,37 @@ class OCRTests(unittest.TestCase):
         result = _table_from_tokens(tokens, column_centers=centers)
         self.assertEqual(result.columns, OCR_COLUMNS)
         self.assertEqual(result.rows[0], ["Z-Average (nm)", "738.9", "", "", "738.9", "738.9"])
+
+
+class ZetaDashboardTests(unittest.TestCase):
+    def test_distribution_peak_overlay_and_batch_summary_bar(self):
+        with tempfile.TemporaryDirectory() as temp:
+            library = ParticleLibrary(Path(temp) / "library.sqlite3")
+            items = [
+                ZetaMeasurement("241101_JM10A_AMP", "DLS", rep, np.array([10, 20, 30]), np.array([1, 8 + rep, 2]), "a.xlsx", "A")
+                for rep in (1, 2, 3)
+            ]
+            library.import_measurements(items)
+            for rep, value in enumerate((100, 110, 120), 1):
+                library.save_ocr_result(items[0].particle_name, "DLS", rep, OCR_COLUMNS,
+                    [["Z-Average (d.nm)", str(value), "", "", "", ""]], [[0.99] * 6], "test", reviewed=False)
+            overlays = []
+            variable = lambda value: SimpleNamespace(get=lambda: value)
+            extension = SimpleNamespace(statistic=variable("Mean"), error_bars=variable(True), error_type=variable("SD"))
+            dashboard = SimpleNamespace(
+                library=library, active_names=lambda: [items[0].particle_name], mode=variable("Mean ± SD"),
+                log_x=variable(True), peak_labels=variable(True), multi_peak_labels=variable(False),
+                dls_plot=SimpleNamespace(register_overlay=overlays.append), zeta_plot=SimpleNamespace(register_overlay=lambda artist: None),
+                dls_batch_settings=extension, zeta_batch_settings=extension,
+            )
+            figure = Figure(); axis = figure.add_subplot(111)
+            ZetaTab._draw_kind(dashboard, "DLS", axis, PlotOptions("X", "nm", "Y", "%"))
+            self.assertEqual(len(overlays), 1)
+            self.assertEqual(axis.get_xscale(), "log")
+            axis.clear()
+            ZetaTab._draw_batch(dashboard, "DLS", axis, PlotOptions("Batch", "", "Z-average", "nm"))
+            self.assertEqual(len(axis.patches), 1)
+            self.assertAlmostEqual(axis.patches[0].get_height(), 110)
 
 
 class ClipboardAndLanguageTests(unittest.TestCase):
