@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1 — 2026-07-22
+
+- Added all-series and per-particle color controls to every ZetaSizer distribution and batch graph.
+- Applied a particle's selected color consistently to replicates, means, SD fills, peak labels, and bars.
+- Persisted the main ZetaSizer selection-list and particle-library column widths in the external user settings file.
+- Preserved saved column layouts and ZetaSizer colors across restarts, upgrades, and rollbacks.
+
 ## 0.7.0 — 2026-07-22
 
 - Split the ZetaSizer plot collection from a separate resizable, detailed particle-library window.

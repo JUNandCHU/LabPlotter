@@ -16,12 +16,14 @@ from typing import Callable
 
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.colors import is_color_like, to_hex
 from matplotlib.figure import Figure
 from matplotlib.patches import Ellipse, Rectangle
 from PIL import Image, ImageTk
 
 from . import __version__
 from .clipboard import copy_png_to_clipboard
+from .config import SettingsStore
 from .i18n import canonical, language, localize_widget_tree, manager as language_manager, set_language, tr, translate_value
 from .models import Spectrum
 from .nmr import parse_bruker_zip, process_bruker_1d
@@ -73,11 +75,96 @@ BASELINE_HELP = {
 }
 
 
+SERIES_PALETTE = (
+    "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
+    "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
+)
+
+ZETA_COLOR_DEFAULTS = {
+    "dls_curve": {"scope": "individual", "global_color": "#1F77B4", "colors": {}},
+    "zeta_curve": {"scope": "individual", "global_color": "#1F77B4", "colors": {}},
+    "dls_bar": {"scope": "all", "global_color": "#4C78A8", "colors": {}},
+    "zeta_bar": {"scope": "all", "global_color": "#F58518", "colors": {}},
+}
+
+
 def _float_or_none(value: str) -> float | None:
     try:
         return float(value.strip()) if value.strip() else None
     except ValueError:
         return None
+
+
+def normalized_color(value: str, fallback: str) -> str:
+    """Return a Matplotlib-compatible color in canonical hex form."""
+    candidate = str(value).strip()
+    if not is_color_like(candidate):
+        candidate = fallback
+    return to_hex(candidate, keep_alpha=False).upper()
+
+
+def resolve_series_color(configuration: dict, particle: str, index: int, default_color: str) -> str:
+    """Resolve an all-series or per-particle ZetaSizer color choice."""
+    if configuration.get("scope") == "all":
+        return normalized_color(configuration.get("global_color", ""), default_color)
+    stored = configuration.get("colors", {})
+    fallback = SERIES_PALETTE[index % len(SERIES_PALETTE)]
+    return normalized_color(stored.get(particle, "") if isinstance(stored, dict) else "", fallback)
+
+
+class TreeColumnWidthState:
+    """Persist manually resized Treeview columns in the user settings file."""
+
+    GROUP = "tree_column_widths"
+
+    def __init__(self, tree: ttk.Treeview, store: SettingsStore, key: str, columns: tuple[str, ...]):
+        self.tree = tree
+        self.store = store
+        self.key = key
+        self.columns = columns
+        self._pending = None
+        self.restore()
+        self.tree.after_idle(self.restore)
+        self.tree.bind("<ButtonRelease-1>", self._schedule_save, add=True)
+        self.tree.bind("<Destroy>", self._destroyed, add=True)
+
+    def restore(self):
+        if not self.tree.winfo_exists():
+            return
+        group = self.store.get(self.GROUP, {})
+        saved = group.get(self.key, {}) if isinstance(group, dict) else {}
+        if not isinstance(saved, dict):
+            return
+        for column in self.columns:
+            try:
+                width = int(saved.get(column, 0))
+                if 40 <= width <= 4000:
+                    self.tree.column(column, width=width)
+            except (TypeError, ValueError, tk.TclError):
+                continue
+
+    def _schedule_save(self, _event=None):
+        if self._pending is not None:
+            self.tree.after_cancel(self._pending)
+        self._pending = self.tree.after(180, self.save)
+
+    def save(self):
+        self._pending = None
+        if not self.tree.winfo_exists():
+            return
+        try:
+            widths = {column: int(self.tree.column(column, "width")) for column in self.columns}
+            group = self.store.get(self.GROUP, {})
+            if not isinstance(group, dict):
+                group = {}
+            group[self.key] = widths
+            self.store.set(self.GROUP, group)
+        except (OSError, tk.TclError, TypeError, ValueError):
+            pass
+
+    def _destroyed(self, event=None):
+        if event is None or event.widget is self.tree:
+            self.save()
 
 
 class HoverTooltip:
@@ -1037,13 +1124,99 @@ class OCRReviewPane(ttk.Frame):
         messagebox.showinfo(tr("OCR saved"), tr("Reviewed OCR result saved to the particle library."), parent=self.winfo_toplevel())
 
 
-class BatchSettingsExtension:
+class SeriesColorSettingsExtension:
+    """Color controls shared by ZetaSizer distribution and batch plots."""
+
+    title = "Series colors"
+
+    def __init__(self, owner, plot_key: str, item_kind: str):
+        self.owner = owner
+        self.plot_key = plot_key
+        self.item_kind = item_kind
+        state = owner.color_settings[plot_key]
+        scope_text = "One color for all" if state["scope"] == "all" else "Set colors by particle"
+        self.color_scope = tk.StringVar(value=tr(scope_text))
+        self.global_color = tk.StringVar(value=state["global_color"])
+        self.color_vars: dict[str, tk.StringVar] = {}
+
+    def build_colors(self, parent):
+        self.color_vars = {}
+        frame = ttk.LabelFrame(parent, text=tr("Curve and bar colors"), padding=8)
+        frame.pack(fill="x", pady=(0, 8))
+        ttk.Label(frame, text=tr("Color mode")).grid(row=0, column=0, sticky="e", padx=(4, 3), pady=3)
+        ttk.Combobox(
+            frame,
+            textvariable=self.color_scope,
+            values=(tr("One color for all"), tr("Set colors by particle")),
+            state="readonly",
+            width=24,
+        ).grid(row=0, column=1, columnspan=2, sticky="w", pady=3)
+        ttk.Label(frame, text=tr("Color for all {items}", items=tr(self.item_kind))).grid(row=1, column=0, sticky="e", padx=(4, 3), pady=3)
+        ttk.Entry(frame, textvariable=self.global_color, width=14).grid(row=1, column=1, sticky="w", pady=3)
+        ttk.Button(frame, text=tr("Choose…"), command=lambda: self._choose_color(self.global_color)).grid(row=1, column=2, sticky="w", padx=4)
+        frame.columnconfigure(1, weight=1)
+
+        individual = ttk.LabelFrame(parent, text=tr("Individual particle colors"), padding=8)
+        individual.pack(fill="both", expand=True, pady=(0, 8))
+        ttk.Label(individual, text=tr("Particle"), font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(individual, text=tr("Color"), font=("TkDefaultFont", 9, "bold")).grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        names = self.owner.active_names()
+        if not names:
+            ttk.Label(individual, text=tr("Add particles to the plots to set individual colors."), foreground="#555555").grid(
+                row=1, column=0, columnspan=3, sticky="w", padx=4, pady=5
+            )
+        for index, name in enumerate(names, start=1):
+            variable = tk.StringVar(value=self.owner.series_color(self.plot_key, name, index - 1))
+            self.color_vars[name] = variable
+            ttk.Label(individual, text=name).grid(row=index, column=0, sticky="w", padx=4, pady=3)
+            ttk.Entry(individual, textvariable=variable, width=14).grid(row=index, column=1, sticky="w", padx=4, pady=3)
+            ttk.Button(individual, text=tr("Choose…"), command=lambda item=variable: self._choose_color(item)).grid(row=index, column=2, sticky="w", padx=4, pady=3)
+        individual.columnconfigure(0, weight=1)
+
+    @staticmethod
+    def _choose_color(variable: tk.StringVar):
+        selected = colorchooser.askcolor(color=variable.get() or "#1F77B4")[1]
+        if selected:
+            variable.set(selected.upper())
+
+    def _store_colors(self):
+        state = self.owner.color_settings[self.plot_key]
+        state["scope"] = "all" if canonical(self.color_scope.get()) == "One color for all" else "individual"
+        default = ZETA_COLOR_DEFAULTS[self.plot_key]["global_color"]
+        state["global_color"] = normalized_color(self.global_color.get(), default)
+        colors = state.setdefault("colors", {})
+        for index, (name, variable) in enumerate(self.color_vars.items()):
+            colors[name] = normalized_color(variable.get(), SERIES_PALETTE[index % len(SERIES_PALETTE)])
+        self.global_color.set(state["global_color"])
+        self.owner.save_color_settings()
+
+    def apply(self):
+        self._store_colors()
+        self.owner._refresh()
+
+    def variables(self):
+        return [self.color_scope, self.global_color, *self.color_vars.values()]
+
+    def restore_colors(self):
+        self.owner.color_settings[self.plot_key] = deepcopy(ZETA_COLOR_DEFAULTS[self.plot_key])
+        default = self.owner.color_settings[self.plot_key]
+        self.color_scope.set(tr("One color for all") if default["scope"] == "all" else tr("Set colors by particle"))
+        self.global_color.set(default["global_color"])
+        for index, (name, variable) in enumerate(self.color_vars.items()):
+            variable.set(self.owner.series_color(self.plot_key, name, index))
+        self.owner.save_color_settings()
+
+    def restore_defaults(self):
+        self.restore_colors()
+
+
+class BatchSettingsExtension(SeriesColorSettingsExtension):
     """Instrument-specific controls embedded in a bar chart's settings window."""
 
     title = "Batch comparison"
 
     def __init__(self, owner, kind: str):
-        self.owner = owner
+        super().__init__(owner, f"{kind.casefold()}_bar", "bars")
         self.kind = kind
         self.statistic = tk.StringVar(value="Mean")
         self.error_bars = tk.BooleanVar(value=True)
@@ -1051,6 +1224,8 @@ class BatchSettingsExtension:
         self.label_vars: dict[str, tk.StringVar] = {}
 
     def build(self, parent):
+        self.label_vars = {}
+        self.build_colors(parent)
         options = ttk.LabelFrame(parent, text=tr("Summary and error bars"), padding=8)
         options.pack(fill="x")
         ttk.Label(options, text=tr("Central value")).grid(row=0, column=0, sticky="e", padx=4)
@@ -1075,10 +1250,11 @@ class BatchSettingsExtension:
     def apply(self):
         for name, variable in self.label_vars.items():
             self.owner.library.set_plot_label(name, variable.get())
+        self._store_colors()
         self.owner.refresh_active()
 
     def variables(self):
-        return [self.statistic, self.error_bars, self.error_type, *self.label_vars.values()]
+        return [*super().variables(), self.statistic, self.error_bars, self.error_type, *self.label_vars.values()]
 
     def reset_labels(self):
         names = list(self.label_vars)
@@ -1087,6 +1263,7 @@ class BatchSettingsExtension:
             variable.set(default_particle_label(name))
 
     def restore_defaults(self):
+        self.restore_colors()
         self.statistic.set(tr("Mean"))
         self.error_bars.set(True)
         self.error_type.set("SD")
@@ -1105,6 +1282,7 @@ class ParticleLibraryWindow(tk.Toplevel):
         super().__init__(owner)
         self.owner = owner
         self.library = owner.library
+        self.settings_store = owner.settings_store
         self.title(tr("ZetaSizer particle library"))
         self.geometry("1400x820")
         self.minsize(980, 620)
@@ -1137,6 +1315,7 @@ class ParticleLibraryWindow(tk.Toplevel):
         for key, label, width in definitions:
             self.tree.heading(key, text=tr(label))
             self.tree.column(key, width=width, minwidth=65, stretch=key in {"name", "source"})
+        self._column_widths = TreeColumnWidthState(self.tree, self.settings_store, "zetasizer_library", columns)
         ybar = ttk.Scrollbar(upper, orient="vertical", command=self.tree.yview)
         xbar = ttk.Scrollbar(upper, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
@@ -1240,6 +1419,7 @@ class ParticleLibraryWindow(tk.Toplevel):
             self.owner.refresh_active(); self.refresh()
 
     def _close(self):
+        self._column_widths.save()
         self.owner.library_window = None
         self.destroy()
 
@@ -1248,6 +1428,8 @@ class ZetaTab(ttk.Frame):
     def __init__(self, parent, library: ParticleLibrary):
         super().__init__(parent)
         self.library = library
+        self.settings_store = SettingsStore()
+        self.color_settings = self._load_color_settings()
         self.active_particles: list[str] = []
         self.library_window = None
         self.mode = tk.StringVar(value="Mean ± SD")
@@ -1272,6 +1454,7 @@ class ZetaTab(ttk.Frame):
         self.tree = ttk.Treeview(tree_frame, columns=("name", "zavg", "zeta"), show="headings", selectmode="extended", style="ParticleLibrary.Treeview")
         for key, label, width in (("name", "Particle", 220), ("zavg", "Z-average", 105), ("zeta", "Average zeta", 110)):
             self.tree.heading(key, text=tr(label)); self.tree.column(key, width=width, minwidth=75, stretch=key == "name")
+        self._column_widths = TreeColumnWidthState(self.tree, self.settings_store, "zetasizer_plot_selection", ("name", "zavg", "zeta"))
         ybar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         xbar = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
@@ -1301,8 +1484,12 @@ class ZetaTab(ttk.Frame):
         self.zeta_plot = PlotPane(frames[1], lambda axis, options: self._draw_kind("Zeta", axis, options), PlotOptions("Zeta potential", "mV", "Total counts", "kcps", line_width=2.2), compact=True)
         self.dls_bar_plot = PlotPane(frames[2], lambda axis, options: self._draw_batch("DLS", axis, options), PlotOptions("Batch", "", "Z-average", "nm", line_width=1.5, legend=False), compact=True)
         self.zeta_bar_plot = PlotPane(frames[3], lambda axis, options: self._draw_batch("Zeta", axis, options), PlotOptions("Batch", "", "Average zeta potential", "mV", line_width=1.5, legend=False), compact=True)
+        self.dls_curve_settings = SeriesColorSettingsExtension(self, "dls_curve", "curves")
+        self.zeta_curve_settings = SeriesColorSettingsExtension(self, "zeta_curve", "curves")
         self.dls_batch_settings = BatchSettingsExtension(self, "DLS")
         self.zeta_batch_settings = BatchSettingsExtension(self, "Zeta")
+        self.dls_plot.settings_extension = self.dls_curve_settings
+        self.zeta_plot.settings_extension = self.zeta_curve_settings
         self.dls_bar_plot.settings_extension = self.dls_batch_settings
         self.zeta_bar_plot.settings_extension = self.zeta_batch_settings
         for frame, plot in zip(frames, (self.dls_plot, self.zeta_plot, self.dls_bar_plot, self.zeta_bar_plot)):
@@ -1310,6 +1497,35 @@ class ZetaTab(ttk.Frame):
         self.plot = self.dls_plot
         self.plot_panes = (self.dls_plot, self.zeta_plot, self.dls_bar_plot, self.zeta_bar_plot)
         self.refresh_active()
+
+    def _load_color_settings(self):
+        saved = self.settings_store.get("zetasizer_colors", {})
+        saved = saved if isinstance(saved, dict) else {}
+        result = {}
+        for key, defaults in ZETA_COLOR_DEFAULTS.items():
+            value = saved.get(key, {})
+            value = value if isinstance(value, dict) else {}
+            scope = value.get("scope") if value.get("scope") in {"all", "individual"} else defaults["scope"]
+            colors = value.get("colors", {}) if isinstance(value.get("colors"), dict) else {}
+            result[key] = {
+                "scope": scope,
+                "global_color": normalized_color(value.get("global_color", ""), defaults["global_color"]),
+                "colors": {
+                    str(name): normalized_color(color, SERIES_PALETTE[index % len(SERIES_PALETTE)])
+                    for index, (name, color) in enumerate(colors.items())
+                },
+            }
+        return result
+
+    def save_color_settings(self):
+        try:
+            self.settings_store.set("zetasizer_colors", self.color_settings)
+        except OSError:
+            pass
+
+    def series_color(self, plot_key: str, particle: str, index: int) -> str:
+        defaults = ZETA_COLOR_DEFAULTS[plot_key]
+        return resolve_series_color(self.color_settings[plot_key], particle, index, defaults["global_color"])
 
     @staticmethod
     def _display_number(value, unit=""):
@@ -1406,14 +1622,14 @@ class ZetaTab(ttk.Frame):
         names = self.active_names()
         mode = canonical(self.mode.get())
         data = self.library.measurements(names, kind)
-        palette = __import__("matplotlib").colormaps["tab10"].colors
+        plot_key = f"{kind.casefold()}_curve"
         pane = self.dls_plot if kind == "DLS" else self.zeta_plot
         show_peaks = self.peak_labels.get() and (len(names) == 1 or self.multi_peak_labels.get())
         for color_index, name in enumerate(names):
             items = data.get(name, [])
             if not items:
                 continue
-            color = palette[color_index % len(palette)]
+            color = self.series_color(plot_key, name, color_index)
             curves = [(item["x"], item["y"]) for item in items]
             if mode in {"Mean + replicates", "Replicates only"}:
                 for item in items:
@@ -1441,17 +1657,19 @@ class ZetaTab(ttk.Frame):
         extension = self.dls_batch_settings if kind == "DLS" else self.zeta_batch_settings
         prefix = "dls_z" if kind == "DLS" else "zeta_average"
         statistic = canonical(extension.statistic.get()).casefold()
-        values, errors, labels = [], [], []
+        values, errors, labels, particles = [], [], [], []
         for name in names:
             row = rows.get(name, {})
             value = row.get(f"{prefix}_median" if statistic == "median" else f"{prefix}_mean")
             if value is None:
                 continue
-            labels.append(row.get("plot_label") or default_particle_label(name)); values.append(value)
+            particles.append(name); labels.append(row.get("plot_label") or default_particle_label(name)); values.append(value)
             errors.append(row.get(f"{prefix}_{canonical(extension.error_type.get()).casefold()}") or 0.0)
         if values:
             x = np.arange(len(values))
-            axis.bar(x, values, color="#4C78A8" if kind == "DLS" else "#F58518", edgecolor="black", linewidth=0.7,
+            plot_key = f"{kind.casefold()}_bar"
+            colors = [self.series_color(plot_key, name, index) for index, name in enumerate(particles)]
+            axis.bar(x, values, color=colors, edgecolor="black", linewidth=0.7,
                      yerr=errors if extension.error_bars.get() else None, capsize=4)
             axis.set_xticks(x, labels, rotation=30, ha="right")
         else:

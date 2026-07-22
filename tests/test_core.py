@@ -15,6 +15,7 @@ from PIL import Image
 from matplotlib.figure import Figure
 
 from labplotter.clipboard import _configure_windows_clipboard_api, png_to_dib
+from labplotter.config import SettingsStore
 from labplotter.i18n import LanguageManager, canonical, translate_value
 from labplotter.nmr import parse_bruker_zip
 from labplotter.ocr import OCR_COLUMNS, _Token, _table_from_tokens
@@ -23,7 +24,7 @@ from labplotter.parsers import detect_builtin_kind
 from labplotter.plotting import PlotOptions, apply_origin_style, font_family_for_text
 from labplotter.processing import asls_baseline, estimate_ftir_baseline, mean_curve, normalize, process_ftir
 from labplotter.storage import FormatProfileStore, ParticleLibrary, default_particle_label
-from labplotter.ui import ZetaTab
+from labplotter.ui import ZetaTab, resolve_series_color
 
 
 class ProcessingTests(unittest.TestCase):
@@ -195,6 +196,7 @@ class ZetaDashboardTests(unittest.TestCase):
                 log_x=variable(True), peak_labels=variable(True), multi_peak_labels=variable(False),
                 dls_plot=SimpleNamespace(register_overlay=overlays.append), zeta_plot=SimpleNamespace(register_overlay=lambda artist: None),
                 dls_batch_settings=extension, zeta_batch_settings=extension,
+                series_color=lambda _key, _name, _index: "#123456",
             )
             figure = Figure(); axis = figure.add_subplot(111)
             ZetaTab._draw_kind(dashboard, "DLS", axis, PlotOptions("X", "nm", "Y", "%"))
@@ -204,6 +206,14 @@ class ZetaDashboardTests(unittest.TestCase):
             ZetaTab._draw_batch(dashboard, "DLS", axis, PlotOptions("Batch", "", "Z-average", "nm"))
             self.assertEqual(len(axis.patches), 1)
             self.assertAlmostEqual(axis.patches[0].get_height(), 110)
+            self.assertTrue(np.allclose(axis.patches[0].get_facecolor()[:3], (0x12 / 255, 0x34 / 255, 0x56 / 255)))
+
+    def test_all_and_individual_series_colors(self):
+        all_series = {"scope": "all", "global_color": "#ABCDEF", "colors": {"A": "#000000"}}
+        self.assertEqual(resolve_series_color(all_series, "A", 0, "#123456"), "#ABCDEF")
+        individual = {"scope": "individual", "global_color": "#ABCDEF", "colors": {"A": "#654321"}}
+        self.assertEqual(resolve_series_color(individual, "A", 0, "#123456"), "#654321")
+        self.assertEqual(resolve_series_color(individual, "B", 1, "#123456"), "#FF7F0E")
 
 
 class ClipboardAndLanguageTests(unittest.TestCase):
@@ -242,6 +252,16 @@ class ClipboardAndLanguageTests(unittest.TestCase):
             self.assertEqual(canonical("흰색"), "White")
             self.assertEqual(translate_value("Installed version: 0.3.1", "en", "ko"), "설치된 버전: 0.3.1")
             self.assertEqual(canonical("Zeta 전위"), "Zeta")
+
+    def test_external_settings_preserve_language_and_ui_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "settings.json"
+            LanguageManager(path).set("ko")
+            store = SettingsStore(path)
+            store.set("tree_column_widths", {"zetasizer_plot_selection": {"name": 310, "zavg": 145, "zeta": 125}})
+            saved = store.load()
+            self.assertEqual(saved["language"], "ko")
+            self.assertEqual(saved["tree_column_widths"]["zetasizer_plot_selection"]["zavg"], 145)
 
 
 class SolidStateNMRTests(unittest.TestCase):
