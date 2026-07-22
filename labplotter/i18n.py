@@ -396,6 +396,8 @@ KO = {
     "This patch is not for LabPlotter.": "LabPlotter용 패치가 아닙니다.",
     "Patch version metadata is incomplete.": "패치 버전 정보가 불완전합니다.",
     "Patch file lists are invalid.": "패치 파일 목록이 잘못되었습니다.",
+    "Invalid cumulative snapshot metadata.": "누적 스냅샷 패치 정보가 잘못되었습니다.",
+    "Cumulative snapshot file inventory is incomplete.": "누적 스냅샷의 파일 목록이 불완전합니다.",
     "A patch file entry is incomplete.": "패치 파일 항목이 불완전합니다.",
     "Duplicate patch path: {path}": "중복된 패치 경로입니다: {path}",
     "Patch payload is missing: {path}": "패치 데이터가 없습니다: {path}",
