@@ -59,7 +59,7 @@ class ParticleLibrary:
         if not self.path.exists() or not self.path.stat().st_size:
             return
         try:
-            with sqlite3.connect(self.path) as con:
+            with closing(sqlite3.connect(self.path)) as con:
                 generation = int(con.execute("PRAGMA user_version").fetchone()[0])
         except sqlite3.DatabaseError:
             generation = 0
