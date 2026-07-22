@@ -5,6 +5,7 @@ import unittest
 import ctypes
 import sqlite3
 import zipfile
+from contextlib import closing
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -148,9 +149,10 @@ class StorageTests(unittest.TestCase):
     def test_pre_070_library_is_reset_once_and_new_database_is_stamped(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "library.sqlite3"
-            with sqlite3.connect(path) as con:
+            with closing(sqlite3.connect(path)) as con:
                 con.execute("CREATE TABLE legacy_particle(name TEXT)")
                 con.execute("INSERT INTO legacy_particle VALUES('old')")
+                con.commit()
             library = ParticleLibrary(path)
             with library.connect() as con:
                 self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], ParticleLibrary.SCHEMA_GENERATION)
