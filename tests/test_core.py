@@ -154,7 +154,7 @@ class StorageTests(unittest.TestCase):
                 con.execute("INSERT INTO legacy_particle VALUES('old')")
                 con.commit()
             library = ParticleLibrary(path)
-            with library.connect() as con:
+            with closing(library.connect()) as con:
                 self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], ParticleLibrary.SCHEMA_GENERATION)
                 self.assertIsNone(con.execute("SELECT name FROM sqlite_master WHERE name='legacy_particle'").fetchone())
             library.import_measurements([ZetaMeasurement("Keep", "DLS", 1, np.array([1]), np.array([2]), "a.xlsx", "A")])
