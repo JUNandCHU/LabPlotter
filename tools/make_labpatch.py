@@ -45,6 +45,7 @@ def build_patch(
     output: Path,
     notes: str = "",
     database_migration: bool = False,
+    database_reset: bool = False,
 ) -> dict:
     base_root, new_root = base_root.resolve(), new_root.resolve()
     base, new = collect_files(base_root), collect_files(new_root)
@@ -71,6 +72,7 @@ def build_patch(
         "notes": notes,
         "requirements_changed": requirements_changed,
         "database_migration": bool(database_migration),
+        "database_reset": bool(database_reset),
         "files": files,
         "delete": delete,
     }
@@ -90,6 +92,7 @@ def build_snapshot_patch(
     output: Path,
     notes: str = "",
     obsolete_paths: list[str] | None = None,
+    database_reset: bool = False,
 ) -> dict:
     """Build a complete target snapshot accepted by updater format 2.
 
@@ -117,6 +120,7 @@ def build_snapshot_patch(
         "notes": notes,
         "requirements_changed": True,
         "database_migration": True,
+        "database_reset": bool(database_reset),
         "managed_paths": [entry["path"] for entry in files],
         "files": files,
         "delete": delete,
@@ -140,15 +144,16 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--notes", default="")
     parser.add_argument("--database-migration", action="store_true")
+    parser.add_argument("--reset-database", action="store_true", help="Back up, then reset the ZetaSizer particle database during update")
     parser.add_argument("--snapshot", action="store_true", help="Build a format-2 cumulative snapshot from any supported version")
     parser.add_argument("--obsolete-path", action="append", default=[], help="Managed obsolete path to remove in snapshot mode")
     args = parser.parse_args()
     if args.snapshot:
-        manifest = build_snapshot_patch(args.new, args.to_version, args.output, args.notes, args.obsolete_path)
+        manifest = build_snapshot_patch(args.new, args.to_version, args.output, args.notes, args.obsolete_path, args.reset_database)
     else:
         if args.base is None or not args.from_version:
             parser.error("--base and --from-version are required unless --snapshot is used")
-        manifest = build_patch(args.base, args.new, args.from_version, args.to_version, args.output, args.notes, args.database_migration)
+        manifest = build_patch(args.base, args.new, args.from_version, args.to_version, args.output, args.notes, args.database_migration or args.reset_database, args.reset_database)
     print(json.dumps({"files": len(manifest["files"]), "delete": len(manifest["delete"]), "to_version": manifest["to_version"]}))
 
 

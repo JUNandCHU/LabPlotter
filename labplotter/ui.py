@@ -38,7 +38,7 @@ from .parsers import (
 from .plot_settings import AnnotationWindow, PlotSettingsWindow
 from .plotting import AnnotationSpec, PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text
 from .processing import ftir_peak_indices, mean_curve, process_ftir
-from .storage import FormatProfileStore, ParticleLibrary
+from .storage import FormatProfileStore, ParticleLibrary, default_particle_label
 
 
 FTIR_RANGES = (
@@ -155,9 +155,11 @@ class PlotPane(ttk.Frame):
         self.toolbar_frame.pack(fill="x")
         self.toolbar = None
         self.settings_window = None
+        self.settings_extension = None
         self.annotation_window = None
         self.annotations: list[AnnotationSpec] = []
         self.annotation_artists = []
+        self.overlay_artists = []
         self._pending_annotation = None
         self._drawing_start = None
         self._rebuild_toolbar()
@@ -243,6 +245,7 @@ class PlotPane(ttk.Frame):
     def refresh(self):
         self._read_options()
         self.axis.clear()
+        self.overlay_artists = []
         try:
             self.draw_callback(self.axis, self.options)
             apply_origin_style(self.figure, self.axis, self.options)
@@ -259,6 +262,11 @@ class PlotPane(ttk.Frame):
             self.canvas.draw_idle()
         except Exception as exc:
             messagebox.showerror(tr("Plot error"), str(exc), parent=self)
+
+    def register_overlay(self, artist):
+        """Register an automatic label that follows annotation export visibility."""
+        self.overlay_artists.append(artist)
+        return artist
 
     def open_settings(self):
         if self.settings_window and self.settings_window.winfo_exists():
@@ -360,14 +368,15 @@ class PlotPane(ttk.Frame):
             self.annotation_artists.append(artist)
 
     def _with_annotation_visibility(self, visible: bool, callback: Callable):
-        previous = [artist.get_visible() for artist in self.annotation_artists]
+        artists = [*self.annotation_artists, *self.overlay_artists]
+        previous = [artist.get_visible() for artist in artists]
         try:
-            for artist in self.annotation_artists:
+            for artist in artists:
                 artist.set_visible(visible)
             self.canvas.draw()
             return callback()
         finally:
-            for artist, state in zip(self.annotation_artists, previous):
+            for artist, state in zip(artists, previous):
                 artist.set_visible(state)
             self.canvas.draw_idle()
 
@@ -940,9 +949,9 @@ class OCRReviewPane(ttk.Frame):
         ttk.Button(buttons, text=tr("Save reviewed result to library"), command=self.save_reviewed).pack(side="right")
 
         saved = self.library.ocr_result(particle, kind, replicate)
-        if saved:
+        if saved and saved.get("status") != "failed":
             self.set_table(OCRTable(tuple(saved["columns"]), saved["rows"], saved["confidence"], [], saved["engine"]))
-            self.status.set(tr("Reviewed and saved"))
+            self.status.set(tr("Reviewed and saved") if saved.get("status") == "reviewed" else tr("Auto OCR draft · review required"))
         else:
             self.after_idle(self.run_ocr)
 
@@ -1022,163 +1031,384 @@ class OCRReviewPane(ttk.Frame):
         ):
             return
         rows = self.values()
-        self.library.save_ocr_result(self.particle, self.kind, self.replicate, self.columns, rows, self.confidence, self.engine)
+        self.library.save_ocr_result(self.particle, self.kind, self.replicate, self.columns, rows, self.confidence, self.engine, reviewed=True)
         self.status.set(tr("Reviewed and saved"))
         self.on_saved()
         messagebox.showinfo(tr("OCR saved"), tr("Reviewed OCR result saved to the particle library."), parent=self.winfo_toplevel())
 
 
-class ZetaTab(ttk.Frame):
+class BatchSettingsExtension:
+    """Instrument-specific controls embedded in a bar chart's settings window."""
+
+    title = "Batch comparison"
+
+    def __init__(self, owner, kind: str):
+        self.owner = owner
+        self.kind = kind
+        self.statistic = tk.StringVar(value="Mean")
+        self.error_bars = tk.BooleanVar(value=True)
+        self.error_type = tk.StringVar(value="SD")
+        self.label_vars: dict[str, tk.StringVar] = {}
+
+    def build(self, parent):
+        options = ttk.LabelFrame(parent, text=tr("Summary and error bars"), padding=8)
+        options.pack(fill="x")
+        ttk.Label(options, text=tr("Central value")).grid(row=0, column=0, sticky="e", padx=4)
+        ttk.Combobox(options, textvariable=self.statistic, values=(tr("Mean"), tr("Median")), state="readonly", width=14).grid(row=0, column=1, sticky="w")
+        ttk.Checkbutton(options, text=tr("Show error bars"), variable=self.error_bars).grid(row=0, column=2, sticky="w", padx=12)
+        ttk.Combobox(options, textvariable=self.error_type, values=("SD", "SEM"), state="readonly", width=8).grid(row=0, column=3, sticky="w")
+
+        labels = ttk.LabelFrame(parent, text=tr("Editable batch names"), padding=8)
+        labels.pack(fill="both", expand=True, pady=(8, 0))
+        ttk.Label(labels, text=tr("Source particle"), font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(labels, text=tr("Batch name on X-axis"), font=("TkDefaultFont", 9, "bold")).grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        rows = {row["name"]: row for row in self.owner.library.particles()}
+        for index, name in enumerate(self.owner.active_names(), start=1):
+            value = rows.get(name, {}).get("plot_label") or default_particle_label(name)
+            variable = tk.StringVar(value=value)
+            self.label_vars[name] = variable
+            ttk.Label(labels, text=name).grid(row=index, column=0, sticky="w", padx=4, pady=3)
+            ttk.Entry(labels, textvariable=variable, width=28).grid(row=index, column=1, sticky="ew", padx=4, pady=3)
+        labels.columnconfigure(1, weight=1)
+        ttk.Button(parent, text=tr("Reset batch names to automatic JM labels"), command=self.reset_labels).pack(anchor="e", pady=(7, 0))
+
+    def apply(self):
+        for name, variable in self.label_vars.items():
+            self.owner.library.set_plot_label(name, variable.get())
+        self.owner.refresh_active()
+
+    def variables(self):
+        return [self.statistic, self.error_bars, self.error_type, *self.label_vars.values()]
+
+    def reset_labels(self):
+        names = list(self.label_vars)
+        self.owner.library.reset_plot_labels(names)
+        for name, variable in self.label_vars.items():
+            variable.set(default_particle_label(name))
+
+    def restore_defaults(self):
+        self.statistic.set(tr("Mean"))
+        self.error_bars.set(True)
+        self.error_type.set("SD")
+        self.reset_labels()
+
+
+class ParticleLibraryWindow(tk.Toplevel):
     SORT_OPTIONS = {
-        "Name A–Z": ("name", False),
-        "Name Z–A": ("name", True),
-        "Recently updated": ("updated_at", True),
-        "DLS count (high first)": ("dls_count", True),
-        "Zeta count (high first)": ("zeta_count", True),
-        "OCR reviewed (high first)": ("ocr_count", True),
+        "Name A–Z": ("name", False), "Name Z–A": ("name", True),
+        "Recently updated": ("updated_at", True), "DLS count (high first)": ("dls_count", True),
+        "Zeta count (high first)": ("zeta_count", True), "OCR reviewed (high first)": ("ocr_reviewed", True),
         "Source A–Z": ("source_files", False),
     }
 
-    def __init__(self, parent, library: ParticleLibrary):
-        super().__init__(parent)
-        self.library = library
-        paned = ttk.Panedwindow(self, orient="horizontal")
-        paned.pack(fill="both", expand=True)
-        controls, graph = ttk.Frame(paned, padding=8, width=520), ttk.Frame(paned, padding=5)
-        paned.add(controls, weight=1)
-        paned.add(graph, weight=3)
-        ttk.Button(controls, text="Import ZetaSizer workbook…", command=self.import_dialog).pack(fill="x")
-        ttk.Label(controls, text="Particle library · select one or more", foreground="#555555").pack(anchor="w", pady=(8, 3))
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self.library = owner.library
+        self.title(tr("ZetaSizer particle library"))
+        self.geometry("1400x820")
+        self.minsize(980, 620)
+        self.protocol("WM_DELETE_WINDOW", self._close)
 
-        default_font = tkfont.nametofont("TkDefaultFont")
-        style = ttk.Style(self)
-        style.configure("ParticleLibrary.Treeview", rowheight=max(32, int(default_font.metrics("linespace") * 1.75)), padding=(4, 4))
-        style.configure("ParticleLibrary.Treeview.Heading", font=(default_font.actual("family"), default_font.actual("size"), "bold"))
-        tree_frame = ttk.Frame(controls)
-        tree_frame.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(
-            tree_frame,
-            columns=("name", "dls", "zeta", "ocr", "source"),
-            show="headings",
-            selectmode="extended",
-            height=15,
-            style="ParticleLibrary.Treeview",
+        toolbar = ttk.Frame(self, padding=8)
+        toolbar.pack(fill="x")
+        ttk.Button(toolbar, text=tr("Add selected to plots"), command=self.add_selected).pack(side="left")
+        ttk.Button(toolbar, text=tr("View result tables…"), command=self.view_tables).pack(side="left", padx=5)
+        ttk.Button(toolbar, text=tr("Edit batch name…"), command=self.edit_label).pack(side="left")
+        ttk.Button(toolbar, text=tr("Delete selected…"), command=self.delete_selected).pack(side="left", padx=5)
+        ttk.Button(toolbar, text=tr("Refresh library"), command=self.refresh).pack(side="right")
+        self.sort_choice = tk.StringVar(value=tr("Name A–Z"))
+        sort_box = ttk.Combobox(toolbar, textvariable=self.sort_choice, values=tuple(tr(value) for value in self.SORT_OPTIONS), state="readonly", width=25)
+        sort_box.pack(side="right", padx=5)
+        sort_box.bind("<<ComboboxSelected>>", lambda _event: self.refresh())
+        ttk.Label(toolbar, text=tr("Sort by")).pack(side="right")
+
+        vertical = ttk.Panedwindow(self, orient="vertical")
+        vertical.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        upper, lower = ttk.Frame(vertical), ttk.Frame(vertical)
+        vertical.add(upper, weight=3); vertical.add(lower, weight=2)
+        columns = ("name", "batch", "zavg", "zetaavg", "dls", "zeta", "ocr", "source")
+        self.tree = ttk.Treeview(upper, columns=columns, show="headings", selectmode="extended", style="ParticleLibrary.Treeview")
+        definitions = (
+            ("name", "Particle", 220), ("batch", "Batch", 100), ("zavg", "Z-average", 100),
+            ("zetaavg", "Average zeta", 110), ("dls", "DLS n", 70), ("zeta", "Zeta n", 70),
+            ("ocr", "OCR status", 160), ("source", "Source", 300),
         )
-        widths = (("name", "Particle", 220), ("dls", "DLS n", 70), ("zeta", "Zeta n", 75), ("ocr", "OCR n", 75), ("source", "Source", 260))
-        for key, text, width in widths:
-            self.tree.heading(key, text=text, command=lambda column=key: self._sort_column(column))
-            self.tree.column(key, width=width, minwidth=55, stretch=key in {"name", "source"})
-        vertical = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        horizontal = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vertical.grid(row=0, column=1, sticky="ns")
-        horizontal.grid(row=1, column=0, sticky="ew")
-        tree_frame.rowconfigure(0, weight=1)
-        tree_frame.columnconfigure(0, weight=1)
-        self.tree.bind("<<TreeviewSelect>>", lambda _event: self._refresh())
+        for key, label, width in definitions:
+            self.tree.heading(key, text=tr(label))
+            self.tree.column(key, width=width, minwidth=65, stretch=key in {"name", "source"})
+        ybar = ttk.Scrollbar(upper, orient="vertical", command=self.tree.yview)
+        xbar = ttk.Scrollbar(upper, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
+        self.tree.grid(row=0, column=0, sticky="nsew"); ybar.grid(row=0, column=1, sticky="ns"); xbar.grid(row=1, column=0, sticky="ew")
+        upper.rowconfigure(0, weight=1); upper.columnconfigure(0, weight=1)
+        self.tree.bind("<<TreeviewSelect>>", lambda _event: self.refresh_details())
+        self.tree.bind("<Double-1>", lambda _event: self.edit_label())
 
-        library_tools = ttk.LabelFrame(controls, text="Library tools", padding=6)
-        library_tools.pack(fill="x", pady=7)
-        self.sort_choice = tk.StringVar(value="Name A–Z")
-        ttk.Label(library_tools, text="Sort by").grid(row=0, column=0, sticky="w")
-        sort_box = ttk.Combobox(library_tools, textvariable=self.sort_choice, values=tuple(self.SORT_OPTIONS), state="readonly", width=24)
-        sort_box.grid(row=0, column=1, sticky="ew", padx=(5, 0))
-        sort_box.bind("<<ComboboxSelected>>", lambda _event: self.refresh_library())
-        ttk.Button(library_tools, text="Default sorting", command=self.reset_sort).grid(row=1, column=0, sticky="ew", pady=(5, 0))
-        ttk.Button(library_tools, text="Delete selected…", command=self.delete_selected).grid(row=1, column=1, sticky="ew", padx=(5, 0), pady=(5, 0))
-        ttk.Button(library_tools, text="View result tables…", command=self.view_tables).grid(row=2, column=0, sticky="ew", pady=(5, 0))
-        ttk.Button(library_tools, text="Refresh library", command=self.refresh_library).grid(row=2, column=1, sticky="ew", padx=(5, 0), pady=(5, 0))
-        library_tools.columnconfigure(1, weight=1)
+        details = ttk.Notebook(lower)
+        details.pack(fill="both", expand=True)
+        measure_frame, ocr_frame = ttk.Frame(details), ttk.Frame(details)
+        details.add(measure_frame, text=tr("Measurements and sources")); details.add(ocr_frame, text=tr("Stored OCR data"))
+        self.measure_tree = self._detail_tree(measure_frame, ("kind", "rep", "sheet", "cell", "source", "ocr"),
+            (("kind", "Data", 80), ("rep", "Replicate", 75), ("sheet", "Sheet", 180), ("cell", "Cell", 90), ("source", "Source", 300), ("ocr", "OCR status", 130)))
+        self.ocr_tree = self._detail_tree(ocr_frame, ("kind", "rep", "status", "field", "mean", "engine"),
+            (("kind", "Data", 80), ("rep", "Replicate", 75), ("status", "Status", 100), ("field", "OCR field", 300), ("mean", "Mean", 100), ("engine", "Engine", 200)))
+        localize_widget_tree(self)
+        self.refresh()
 
-        self.mode = tk.StringVar(value="Mean ± SD")
-        self.log_x = tk.BooleanVar(value=True)
-        settings = ttk.LabelFrame(controls, text="Comparison", padding=6)
-        settings.pack(fill="x")
-        ttk.Label(settings, text="Display").grid(row=0, column=0, sticky="w")
-        mode_box = ttk.Combobox(settings, textvariable=self.mode, values=("Mean ± SD", "Mean + replicates", "Replicates only"), state="readonly", width=22)
-        mode_box.grid(row=0, column=1, sticky="ew")
-        mode_box.bind("<<ComboboxSelected>>", lambda _event: self._refresh())
-        ttk.Checkbutton(settings, text="Log X for DLS", variable=self.log_x, command=self._refresh).grid(row=1, column=0, columnspan=2, sticky="w")
-        settings.columnconfigure(1, weight=1)
+    @staticmethod
+    def _detail_tree(parent, columns, definitions):
+        tree = ttk.Treeview(parent, columns=columns, show="headings", style="ParticleLibrary.Treeview")
+        for key, label, width in definitions:
+            tree.heading(key, text=tr(label)); tree.column(key, width=width, minwidth=60, stretch=key in {"sheet", "source", "field"})
+        ybar = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
+        xbar = ttk.Scrollbar(parent, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
+        tree.grid(row=0, column=0, sticky="nsew"); ybar.grid(row=0, column=1, sticky="ns"); xbar.grid(row=1, column=0, sticky="ew")
+        parent.rowconfigure(0, weight=1); parent.columnconfigure(0, weight=1)
+        return tree
 
-        graph_paned = ttk.Panedwindow(graph, orient="horizontal")
-        graph_paned.pack(fill="both", expand=True)
-        dls_frame = ttk.LabelFrame(graph_paned, text="DLS", padding=3)
-        zeta_frame = ttk.LabelFrame(graph_paned, text="Zeta potential", padding=3)
-        graph_paned.add(dls_frame, weight=1)
-        graph_paned.add(zeta_frame, weight=1)
-        self.dls_plot = PlotPane(dls_frame, lambda axis, options: self._draw_kind("DLS", axis, options), PlotOptions("Particle diameter", "nm", "Intensity", "%", line_width=2.2), compact=True)
-        self.zeta_plot = PlotPane(zeta_frame, lambda axis, options: self._draw_kind("Zeta", axis, options), PlotOptions("Zeta potential", "mV", "Total counts", "kcps", line_width=2.2), compact=True)
-        self.dls_plot.pack(fill="both", expand=True)
-        self.zeta_plot.pack(fill="both", expand=True)
-        self.plot = self.dls_plot
-        self.plot_panes = (self.dls_plot, self.zeta_plot)
-        self.refresh_library()
+    @staticmethod
+    def _display_number(value, unit=""):
+        return "—" if value is None else f"{value:.4g}{unit}"
 
-    def import_dialog(self):
-        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("ZetaSizer Excel"), "*.xlsx *.xlsm"), (tr("All files"), "*.*")))
-        self.add_paths(paths)
-
-    def add_paths(self, paths):
-        imported = 0
-        particles = set()
-        for path in paths:
-            try:
-                measurements = parse_zetasizer_workbook(path)
-                imported += self.library.import_measurements(measurements)
-                particles.update(m.particle_name for m in measurements)
-            except Exception as exc:
-                messagebox.showerror(tr("ZetaSizer import"), f"{Path(path).name}\n{exc}", parent=self)
-        if imported:
-            self.refresh_library(select=particles)
-            messagebox.showinfo(tr("Imported"), tr("Stored {curves} replicate curves for {particles} particles.", curves=imported, particles=len(particles)), parent=self)
-
-    def _sort_values(self) -> tuple[str, bool]:
+    def _sort_values(self):
         return self.SORT_OPTIONS.get(canonical(self.sort_choice.get()), ("name", False))
 
-    def refresh_library(self, select=()):
-        selected = set(select) or set(self.tree.selection())
+    def refresh(self, selected=()):
+        keep = set(selected) or set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         sort_by, descending = self._sort_values()
         for row in self.library.particles(sort_by, descending):
-            iid = row["name"]
-            self.tree.insert("", "end", iid=iid, values=(row["name"], row["dls_count"], row["zeta_count"], row["ocr_count"], row["source_files"] or ""))
-            if iid in selected:
-                self.tree.selection_add(iid)
-        self._refresh()
+            status = f"{row['ocr_auto']} {tr('auto')} · {row['ocr_reviewed']} {tr('reviewed')}"
+            if row["ocr_failed"]:
+                status += f" · {row['ocr_failed']} {tr('failed')}"
+            values = (row["name"], row["plot_label"], self._display_number(row.get("dls_z_mean"), " nm"),
+                      self._display_number(row.get("zeta_average_mean"), " mV"), row["dls_count"], row["zeta_count"], status, row["source_files"] or "")
+            self.tree.insert("", "end", iid=row["name"], values=values)
+            if row["name"] in keep:
+                self.tree.selection_add(row["name"])
+        self.refresh_details()
 
-    def reset_sort(self):
-        self.sort_choice.set(tr("Name A–Z"))
-        self.refresh_library()
+    def refresh_details(self):
+        self.measure_tree.delete(*self.measure_tree.get_children())
+        self.ocr_tree.delete(*self.ocr_tree.get_children())
+        selected = list(self.tree.selection())
+        if len(selected) != 1:
+            return
+        particle = selected[0]
+        for index, row in enumerate(self.library.measurement_records(particle)):
+            self.measure_tree.insert("", "end", iid=f"m{index}", values=(row["kind"], row["replicate"], row["sheet_name"], row["cell_number"], row["source_file"], row["ocr_status"]))
+        for item in self.library.ocr_results(particle):
+            columns = [str(value).casefold() for value in item["columns"]]
+            mean_index = next((index for index, value in enumerate(columns) if "mean" in value), 1)
+            if not item["rows"]:
+                self.ocr_tree.insert("", "end", values=(item["kind"], item["replicate"], item["status"], item.get("error_text") or "—", "", item["engine"]))
+            for row in item["rows"]:
+                self.ocr_tree.insert("", "end", values=(item["kind"], item["replicate"], item["status"], row[0] if row else "", row[mean_index] if mean_index < len(row) else "", item["engine"]))
 
-    def _sort_column(self, column: str):
-        mapping = {"name": "Name A–Z", "dls": "DLS count (high first)", "zeta": "Zeta count (high first)", "ocr": "OCR reviewed (high first)", "source": "Source A–Z"}
-        choice = mapping[column]
-        if column == "name" and canonical(self.sort_choice.get()) == "Name A–Z":
-            choice = "Name Z–A"
-        self.sort_choice.set(tr(choice))
-        self.refresh_library()
+    def add_selected(self):
+        names = list(self.tree.selection())
+        if names:
+            self.owner.add_particle_names(names)
+
+    def view_tables(self):
+        selected = list(self.tree.selection())
+        if len(selected) != 1:
+            messagebox.showinfo(tr("Result tables"), tr("Select exactly one particle."), parent=self)
+            return
+        self.owner.view_tables_for(selected[0], parent=self)
+
+    def edit_label(self):
+        selected = list(self.tree.selection())
+        if len(selected) != 1:
+            return
+        row = next((value for value in self.library.particles() if value["name"] == selected[0]), None)
+        value = simpledialog.askstring(tr("Edit batch name"), tr("Batch name on X-axis"), initialvalue=row["plot_label"] if row else default_particle_label(selected[0]), parent=self)
+        if value is not None:
+            self.library.set_plot_label(selected[0], value)
+            self.refresh(selected)
+            self.owner.refresh_active()
 
     def delete_selected(self):
         selected = list(self.tree.selection())
         if not selected:
-            messagebox.showinfo(tr("Particle library"), tr("Select one or more particles first."), parent=self)
             return
-        if not messagebox.askyesno(
-            tr("Delete particles"),
-            tr("Delete {count} selected particles and all of their stored measurements? This cannot be undone.", count=len(selected)),
-            parent=self,
-        ):
+        if messagebox.askyesno(tr("Delete particles"), tr("Delete {count} selected particles and all of their stored measurements? This cannot be undone.", count=len(selected)), parent=self):
+            self.library.delete_particles(selected)
+            self.owner.active_particles = [name for name in self.owner.active_particles if name not in selected]
+            self.owner.refresh_active(); self.refresh()
+
+    def _close(self):
+        self.owner.library_window = None
+        self.destroy()
+
+
+class ZetaTab(ttk.Frame):
+    def __init__(self, parent, library: ParticleLibrary):
+        super().__init__(parent)
+        self.library = library
+        self.active_particles: list[str] = []
+        self.library_window = None
+        self.mode = tk.StringVar(value="Mean ± SD")
+        self.log_x = tk.BooleanVar(value=True)
+        self.peak_labels = tk.BooleanVar(value=True)
+        self.multi_peak_labels = tk.BooleanVar(value=False)
+
+        paned = ttk.Panedwindow(self, orient="horizontal")
+        paned.pack(fill="both", expand=True)
+        controls, graph = ttk.Frame(paned, padding=8, width=430), ttk.Frame(paned, padding=5)
+        paned.add(controls, weight=1); paned.add(graph, weight=4)
+        ttk.Button(controls, text="Import ZetaSizer workbook…", command=self.import_dialog).pack(fill="x")
+        ttk.Button(controls, text="Open particle library…", command=self.open_library).pack(fill="x", pady=(5, 0))
+        ttk.Label(controls, text="Particles included in the four plots", foreground="#555555").pack(anchor="w", pady=(9, 3))
+
+        default_font = tkfont.nametofont("TkDefaultFont")
+        style = ttk.Style(self)
+        style.configure("ParticleLibrary.Treeview", rowheight=max(34, int(default_font.metrics("linespace") * 1.8)), padding=(4, 4))
+        style.configure("ParticleLibrary.Treeview.Heading", font=(default_font.actual("family"), default_font.actual("size"), "bold"), padding=(4, 6))
+        tree_frame = ttk.Frame(controls)
+        tree_frame.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(tree_frame, columns=("name", "zavg", "zeta"), show="headings", selectmode="extended", style="ParticleLibrary.Treeview")
+        for key, label, width in (("name", "Particle", 220), ("zavg", "Z-average", 105), ("zeta", "Average zeta", 110)):
+            self.tree.heading(key, text=tr(label)); self.tree.column(key, width=width, minwidth=75, stretch=key == "name")
+        ybar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        xbar = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
+        self.tree.grid(row=0, column=0, sticky="nsew"); ybar.grid(row=0, column=1, sticky="ns"); xbar.grid(row=1, column=0, sticky="ew")
+        tree_frame.rowconfigure(0, weight=1); tree_frame.columnconfigure(0, weight=1)
+        ttk.Button(controls, text="Add from library…", command=self.open_library).pack(fill="x", pady=(6, 0))
+        ttk.Button(controls, text="Remove selected from plots", command=self.remove_from_plots).pack(fill="x", pady=(4, 0))
+
+        settings = ttk.LabelFrame(controls, text="Comparison", padding=6)
+        settings.pack(fill="x", pady=(8, 0))
+        ttk.Label(settings, text="Display").grid(row=0, column=0, sticky="w")
+        mode_box = ttk.Combobox(settings, textvariable=self.mode, values=("Mean ± SD", "Mean + replicates", "Replicates only"), state="readonly", width=21)
+        mode_box.grid(row=0, column=1, sticky="ew"); mode_box.bind("<<ComboboxSelected>>", lambda _event: self._refresh())
+        ttk.Checkbutton(settings, text="Log X for DLS", variable=self.log_x, command=self._refresh).grid(row=1, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(settings, text="Peak value labels", variable=self.peak_labels, command=self._refresh).grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(settings, text="Allow labels for multiple particles", variable=self.multi_peak_labels, command=self._refresh).grid(row=3, column=0, columnspan=2, sticky="w")
+        settings.columnconfigure(1, weight=1)
+
+        dashboard = ttk.Panedwindow(graph, orient="vertical")
+        dashboard.pack(fill="both", expand=True)
+        upper, lower = ttk.Panedwindow(dashboard, orient="horizontal"), ttk.Panedwindow(dashboard, orient="horizontal")
+        dashboard.add(upper, weight=1); dashboard.add(lower, weight=1)
+        frames = [ttk.LabelFrame(upper, text=tr("DLS distribution"), padding=3), ttk.LabelFrame(upper, text=tr("Zeta distribution"), padding=3),
+                  ttk.LabelFrame(lower, text=tr("Batch vs DLS Z-average"), padding=3), ttk.LabelFrame(lower, text=tr("Batch vs average zeta potential"), padding=3)]
+        upper.add(frames[0], weight=1); upper.add(frames[1], weight=1); lower.add(frames[2], weight=1); lower.add(frames[3], weight=1)
+        self.dls_plot = PlotPane(frames[0], lambda axis, options: self._draw_kind("DLS", axis, options), PlotOptions("Particle diameter", "nm", "Intensity", "%", line_width=2.2), compact=True)
+        self.zeta_plot = PlotPane(frames[1], lambda axis, options: self._draw_kind("Zeta", axis, options), PlotOptions("Zeta potential", "mV", "Total counts", "kcps", line_width=2.2), compact=True)
+        self.dls_bar_plot = PlotPane(frames[2], lambda axis, options: self._draw_batch("DLS", axis, options), PlotOptions("Batch", "", "Z-average", "nm", line_width=1.5, legend=False), compact=True)
+        self.zeta_bar_plot = PlotPane(frames[3], lambda axis, options: self._draw_batch("Zeta", axis, options), PlotOptions("Batch", "", "Average zeta potential", "mV", line_width=1.5, legend=False), compact=True)
+        self.dls_batch_settings = BatchSettingsExtension(self, "DLS")
+        self.zeta_batch_settings = BatchSettingsExtension(self, "Zeta")
+        self.dls_bar_plot.settings_extension = self.dls_batch_settings
+        self.zeta_bar_plot.settings_extension = self.zeta_batch_settings
+        for frame, plot in zip(frames, (self.dls_plot, self.zeta_plot, self.dls_bar_plot, self.zeta_bar_plot)):
+            plot.pack(fill="both", expand=True)
+        self.plot = self.dls_plot
+        self.plot_panes = (self.dls_plot, self.zeta_plot, self.dls_bar_plot, self.zeta_bar_plot)
+        self.refresh_active()
+
+    @staticmethod
+    def _display_number(value, unit=""):
+        return "—" if value is None else f"{value:.4g}{unit}"
+
+    def active_names(self):
+        return [name for name in self.active_particles if name in set(self.tree.get_children())]
+
+    def add_particle_names(self, names):
+        for name in names:
+            if name not in self.active_particles:
+                self.active_particles.append(name)
+        self.refresh_active()
+
+    def remove_from_plots(self):
+        selected = set(self.tree.selection())
+        self.active_particles = [name for name in self.active_particles if name not in selected]
+        self.refresh_active()
+
+    def open_library(self):
+        if self.library_window and self.library_window.winfo_exists():
+            self.library_window.lift(); self.library_window.focus_force(); return
+        self.library_window = ParticleLibraryWindow(self)
+
+    def refresh_active(self):
+        rows = {row["name"]: row for row in self.library.particles()}
+        self.active_particles = [name for name in self.active_particles if name in rows]
+        self.tree.delete(*self.tree.get_children())
+        for name in self.active_particles:
+            row = rows[name]
+            self.tree.insert("", "end", iid=name, values=(name, self._display_number(row.get("dls_z_mean"), " nm"), self._display_number(row.get("zeta_average_mean"), " mV")))
+        if self.library_window and self.library_window.winfo_exists():
+            self.library_window.refresh()
+        self._refresh()
+
+    def refresh_library(self, select=()):
+        """Compatibility entry point used by OCR panes and older smart-import code."""
+        if select:
+            self.add_particle_names(select)
+        else:
+            self.refresh_active()
+
+    def import_dialog(self):
+        self.add_paths(filedialog.askopenfilenames(parent=self, filetypes=((tr("ZetaSizer Excel"), "*.xlsx *.xlsm"), (tr("All files"), "*.*"))))
+
+    def add_paths(self, paths):
+        paths = tuple(paths)
+        if not paths:
             return
-        self.library.delete_particles(selected)
-        self.refresh_library()
+        progress = tk.Toplevel(self)
+        progress.title(tr("Importing and reading result tables")); progress.transient(self.winfo_toplevel()); progress.resizable(False, False)
+        body = ttk.Frame(progress, padding=16); body.pack(fill="both", expand=True)
+        status = tk.StringVar(value=tr("Reading workbook data…"))
+        ttk.Label(body, textvariable=status, wraplength=430).pack(anchor="w")
+        bar = ttk.Progressbar(body, mode="indeterminate", length=430); bar.pack(fill="x", pady=(10, 0)); bar.start(10)
+        progress.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        def worker():
+            imported, particles, ocr_count, errors = 0, set(), 0, []
+            for path in paths:
+                try:
+                    measurements = parse_zetasizer_workbook(path)
+                    imported += self.library.import_measurements(measurements)
+                    particles.update(item.particle_name for item in measurements)
+                    for item in measurements:
+                        if not item.result_png:
+                            continue
+                        try:
+                            result = run_table_ocr(item.result_png)
+                            self.library.save_ocr_result(item.particle_name, item.kind, item.replicate, result.columns, result.rows, result.confidence, result.engine, reviewed=False)
+                            ocr_count += 1
+                        except Exception as exc:
+                            self.library.save_ocr_failure(item.particle_name, item.kind, item.replicate, str(exc))
+                            errors.append(f"{item.particle_name} · {item.kind} M{item.replicate}: {exc}")
+                except Exception as exc:
+                    errors.append(f"{Path(path).name}: {exc}")
+            self.after(0, lambda: finished(imported, particles, ocr_count, errors))
+
+        def finished(imported, particles, ocr_count, errors):
+            if progress.winfo_exists():
+                progress.destroy()
+            if imported:
+                self.add_particle_names(sorted(particles))
+                message = tr("Stored {curves} replicate curves for {particles} particles and automatically read {tables} result tables.", curves=imported, particles=len(particles), tables=ocr_count)
+                if errors:
+                    message += "\n\n" + tr("Some OCR readings need review:") + "\n" + "\n".join(errors[:8])
+                messagebox.showinfo(tr("Imported"), message, parent=self)
+            elif errors:
+                messagebox.showerror(tr("ZetaSizer import"), "\n".join(errors), parent=self)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _draw_kind(self, kind: str, axis, options):
-        names = list(self.tree.selection())
+        names = self.active_names()
         mode = canonical(self.mode.get())
         data = self.library.measurements(names, kind)
         palette = __import__("matplotlib").colormaps["tab10"].colors
+        pane = self.dls_plot if kind == "DLS" else self.zeta_plot
+        show_peaks = self.peak_labels.get() and (len(names) == 1 or self.multi_peak_labels.get())
         for color_index, name in enumerate(names):
             items = data.get(name, [])
             if not items:
@@ -1187,64 +1417,85 @@ class ZetaTab(ttk.Frame):
             curves = [(item["x"], item["y"]) for item in items]
             if mode in {"Mean + replicates", "Replicates only"}:
                 for item in items:
-                    replicate_label = f"{name} {tr('rep {number}', number=item['replicate'])}"
-                    axis.plot(item["x"], item["y"], color=color, alpha=0.28 if mode == "Mean + replicates" else 0.75, linewidth=max(0.8, options.line_width * 0.65), label=replicate_label if mode == "Replicates only" else "_nolegend_")
+                    label = f"{name} {tr('rep {number}', number=item['replicate'])}"
+                    axis.plot(item["x"], item["y"], color=color, alpha=0.28 if mode == "Mean + replicates" else 0.75, linewidth=max(0.8, options.line_width * 0.65), label=label if mode == "Replicates only" else "_nolegend_")
+            x, mean, sd = mean_curve(curves)
             if mode != "Replicates only":
-                x, mean, sd = mean_curve(curves)
                 axis.plot(x, mean, color=color, linewidth=options.line_width, label=name)
                 if mode == "Mean ± SD":
                     axis.fill_between(x, mean - sd, mean + sd, color=color, alpha=0.18, linewidth=0)
+            if show_peaks and mean.size:
+                index = int(np.nanargmax(mean))
+                unit = "nm" if kind == "DLS" else "mV"
+                artist = axis.annotate(f"{x[index]:.4g} {unit}", (x[index], mean[index]), xytext=(7, 10), textcoords="offset points", color=color,
+                                       fontsize=max(7, options.tick_font_size - 2), fontweight="bold", arrowprops={"arrowstyle": "-", "color": color, "linewidth": 1.0})
+                pane.register_overlay(artist)
         if kind == "DLS" and self.log_x.get():
             axis.set_xscale("log")
         if not names:
-            axis.text(0.5, 0.5, tr("Import a workbook, then select particles from the library"), ha="center", va="center", transform=axis.transAxes)
+            axis.text(0.5, 0.5, tr("Add particles from the library"), ha="center", va="center", transform=axis.transAxes)
+
+    def _draw_batch(self, kind: str, axis, options):
+        names = self.active_names()
+        rows = {row["name"]: row for row in self.library.particles()}
+        extension = self.dls_batch_settings if kind == "DLS" else self.zeta_batch_settings
+        prefix = "dls_z" if kind == "DLS" else "zeta_average"
+        statistic = canonical(extension.statistic.get()).casefold()
+        values, errors, labels = [], [], []
+        for name in names:
+            row = rows.get(name, {})
+            value = row.get(f"{prefix}_median" if statistic == "median" else f"{prefix}_mean")
+            if value is None:
+                continue
+            labels.append(row.get("plot_label") or default_particle_label(name)); values.append(value)
+            errors.append(row.get(f"{prefix}_{canonical(extension.error_type.get()).casefold()}") or 0.0)
+        if values:
+            x = np.arange(len(values))
+            axis.bar(x, values, color="#4C78A8" if kind == "DLS" else "#F58518", edgecolor="black", linewidth=0.7,
+                     yerr=errors if extension.error_bars.get() else None, capsize=4)
+            axis.set_xticks(x, labels, rotation=30, ha="right")
+        else:
+            axis.text(0.5, 0.5, tr("Automatic OCR values will appear here"), ha="center", va="center", transform=axis.transAxes)
 
     def view_tables(self):
         selected = list(self.tree.selection())
         if len(selected) != 1:
             messagebox.showinfo(tr("Result tables"), tr("Select exactly one particle."), parent=self)
             return
-        top = tk.Toplevel(self)
-        top.title(tr("{particle} · result tables", particle=selected[0]))
-        top.geometry("1300x760")
-        top.minsize(850, 500)
-        notebook = ttk.Notebook(top)
-        notebook.pack(fill="both", expand=True, padx=8, pady=8)
+        self.view_tables_for(selected[0])
+
+    def view_tables_for(self, particle: str, parent=None):
+        top = tk.Toplevel(parent or self)
+        top.title(tr("{particle} · result tables", particle=particle)); top.geometry("1400x840"); top.minsize(980, 650)
+        top.rowconfigure(0, weight=1); top.columnconfigure(0, weight=1)
+        notebook = ttk.Notebook(top); notebook.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         review_tabs: dict[tuple[str, int], OCRReviewPane] = {}
 
         def open_ocr(kind: str, measurements: ttk.Notebook):
             replicate = measurements.index("current") + 1
-            raw = self.library.result_image(selected[0], kind, replicate)
+            raw = self.library.result_image(particle, kind, replicate)
             if not raw:
-                messagebox.showinfo(tr("OCR reading"), tr("No embedded table image"), parent=top)
-                return
+                messagebox.showinfo(tr("OCR reading"), tr("No embedded table image"), parent=top); return
             key = (kind, replicate)
             if key in review_tabs and review_tabs[key].winfo_exists():
-                notebook.select(review_tabs[key])
-                return
-            frame = OCRReviewPane(notebook, self.library, selected[0], kind, replicate, raw, self.refresh_library)
-            review_tabs[key] = frame
-            notebook.add(frame, text=tr("{kind}_OCR M{number}", kind=kind, number=replicate))
-            notebook.select(frame)
+                notebook.select(review_tabs[key]); return
+            frame = OCRReviewPane(notebook, self.library, particle, kind, replicate, raw, self.refresh_active)
+            review_tabs[key] = frame; notebook.add(frame, text=tr("{kind}_OCR M{number}", kind=kind, number=replicate)); notebook.select(frame)
 
         for kind in ("DLS", "Zeta"):
-            kind_frame = ttk.Frame(notebook)
+            kind_frame = ttk.Frame(notebook); kind_frame.rowconfigure(0, weight=1); kind_frame.columnconfigure(0, weight=1)
             notebook.add(kind_frame, text=tr(kind))
-            measurements = ttk.Notebook(kind_frame)
-            measurements.pack(fill="both", expand=True)
+            measurements = ttk.Notebook(kind_frame); measurements.grid(row=0, column=0, sticky="nsew")
             for replicate in (1, 2, 3):
-                frame = ttk.Frame(measurements, padding=8)
-                measurements.add(frame, text=tr("Measurement {number}", number=replicate))
-                raw = self.library.result_image(selected[0], kind, replicate)
-                if not raw:
+                frame = ttk.Frame(measurements, padding=8); measurements.add(frame, text=tr("Measurement {number}", number=replicate))
+                raw = self.library.result_image(particle, kind, replicate)
+                if raw:
+                    ZoomImageViewer(frame, Image.open(BytesIO(raw))).pack(fill="both", expand=True)
+                else:
                     ttk.Label(frame, text=tr("No embedded table image")).pack(padx=30, pady=30)
-                    continue
-                viewer = ZoomImageViewer(frame, Image.open(BytesIO(raw)))
-                viewer.pack(fill="both", expand=True)
-            footer = ttk.Frame(kind_frame, padding=(5, 7))
-            footer.pack(side="bottom", fill="x")
-            ttk.Label(footer, text=tr("Select a measurement above, then create an editable OCR review tab."), foreground="#555555").pack(side="left")
-            ttk.Button(footer, text=tr("OCR current measurement…"), command=lambda value=kind, tabs=measurements: open_ocr(value, tabs)).pack(side="right")
+            footer = ttk.Frame(kind_frame, padding=(7, 9)); footer.grid(row=1, column=0, sticky="ew")
+            ttk.Label(footer, text=tr("Automatic OCR is stored on import. Open the selected measurement to review or correct it."), foreground="#555555").pack(side="left")
+            ttk.Button(footer, text=tr("Review current OCR…"), command=lambda value=kind, tabs=measurements: open_ocr(value, tabs)).pack(side="right")
         localize_widget_tree(top)
 
     def _refresh(self):
@@ -1577,9 +1828,7 @@ class LabPlotterApp(tk.Tk):
                 elif kind == "ssNMR":
                     self.nmr.add_paths([path]); self.notebook.select(self.nmr)
                 elif kind == "ZetaSizer":
-                    measurements = parse_zetasizer_workbook(path)
-                    self.zeta.library.import_measurements(measurements)
-                    self.zeta.refresh_library(select={m.particle_name for m in measurements})
+                    self.zeta.add_paths([path])
                     self.notebook.select(self.zeta)
                 else:
                     self.generic.auto_import(path); self.notebook.select(self.generic)

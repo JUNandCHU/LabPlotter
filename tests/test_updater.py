@@ -119,6 +119,27 @@ class UpdaterTests(unittest.TestCase):
                 self.assertTrue(local_file.exists())
                 self.assertEqual((installed / "version.json").exists(), version != "legacy")
 
+    def test_database_reset_is_backed_up_and_rollback_restores_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            installed, target = temporary / "installed", temporary / "target"
+            app_data = temporary / "app-data"
+            app_data.mkdir()
+            database = app_data / "particle_library.sqlite3"
+            database.write_bytes(b"original-library")
+            write_install(installed, "0.6.0", "old")
+            write_install(target, "0.7.0", "new")
+            patch = temporary / "reset.labpatch"
+            manifest = build_patch(installed, target, "0.6.0", "0.7.0", patch,
+                                   database_migration=True, database_reset=True)
+            self.assertTrue(manifest["database_reset"])
+            with mock_patch("updater._app_data_dir", return_value=app_data):
+                result = apply_labpatch(patch, installed, run_smoke=False)
+                self.assertFalse(database.exists())
+                database.write_bytes(b"new-library")
+                rollback_backup(installed, Path(result["backup"]))
+            self.assertEqual(database.read_bytes(), b"original-library")
+
 
 if __name__ == "__main__":
     unittest.main()

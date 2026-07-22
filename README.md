@@ -4,12 +4,12 @@ LabPlotter is a local Windows scientific plotting workbench for FTIR, NanoDrop U
 
 - Origin-style scientific plots with editable axes, fonts, legends, and annotations
 - Multiple-file overlays and instrument-specific processing
-- Local ZetaSizer particle library with user-reviewed OCR result tables
+- Four-panel ZetaSizer dashboard with a separate local particle library, automatic OCR summaries, and editable batch labels
 - English/Korean interface
 - Verified `.labpatch` updates with backup and rollback
 - Measurement data remains on the local computer
 
-The current development release is **0.6.0**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
+The current development release is **0.7.0**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
 
 ## Run from source
 

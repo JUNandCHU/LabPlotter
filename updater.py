@@ -98,6 +98,8 @@ def read_manifest(archive: zipfile.ZipFile) -> dict:
             raise UpdateError(tr("Invalid cumulative snapshot metadata."))
         if not isinstance(manifest.get("managed_paths"), list):
             raise UpdateError(tr("Invalid cumulative snapshot metadata."))
+    if manifest.get("database_reset") and not manifest.get("database_migration"):
+        raise UpdateError(tr("A database reset patch must include database migration backup metadata."))
     return manifest
 
 
@@ -178,9 +180,11 @@ def _backup_installation(app_root: Path, manifest: dict, files: list[tuple[dict,
             created.append(relative.as_posix())
 
     database_backup = None
+    database_existed = False
     if manifest.get("database_migration"):
         database = _app_data_dir() / "particle_library.sqlite3"
         if database.exists():
+            database_existed = True
             database_backup = "particle_library.sqlite3"
             shutil.copy2(database, backup / database_backup)
 
@@ -207,6 +211,8 @@ def _backup_installation(app_root: Path, manifest: dict, files: list[tuple[dict,
         "backed_up_files": backed_up,
         "created_files": created,
         "database_backup": database_backup,
+        "database_existed": database_existed,
+        "database_reset": bool(manifest.get("database_reset")),
         "dependency_snapshot": dependency_snapshot,
         "patch_notes": manifest.get("notes", ""),
     }
@@ -249,6 +255,10 @@ def rollback_backup(app_root: Path, backup: Path, status: Callable[[str], None] 
         destination = _app_data_dir() / "particle_library.sqlite3"
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+    elif value.get("database_reset") and not value.get("database_existed"):
+        destination = _app_data_dir() / "particle_library.sqlite3"
+        if destination.exists():
+            destination.unlink()
     if value.get("dependency_snapshot"):
         report(tr("Restoring the previous Python dependency versions…"))
         snapshot = backup / value["dependency_snapshot"]
@@ -356,6 +366,12 @@ def apply_labpatch(
             if not staged_requirements.exists():
                 raise UpdateError(tr("The manifest declares dependency changes but does not include requirements.txt."))
             _install_requirements(app_root, staged_requirements, log)
+
+        if manifest.get("database_reset"):
+            log(tr("Resetting the ZetaSizer particle library…"))
+            database = _app_data_dir() / "particle_library.sqlite3"
+            if database.exists():
+                database.unlink()
 
         log(tr("Applying verified files…"))
         version_relative = Path("version.json")
