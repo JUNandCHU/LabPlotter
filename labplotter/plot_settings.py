@@ -28,6 +28,8 @@ class PlotSettingsWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.live = tk.BooleanVar(value=True)
         self._traces: list[tuple[tk.Variable, str]] = []
+        self._extension_job = None
+        self._extension_applying = False
 
         top = ttk.Frame(self, padding=(10, 8))
         top.pack(fill="x")
@@ -198,12 +200,40 @@ class PlotSettingsWindow(tk.Toplevel):
             self.after_idle(self.pane.refresh)
 
     def _extension_changed(self, *_args):
-        if self.live.get():
-            self.after_idle(self.extension.apply)
+        if not self.live.get() or self._extension_applying:
+            return
+        if self._extension_job is not None:
+            try:
+                self.after_cancel(self._extension_job)
+            except tk.TclError:
+                pass
+        # A dropdown selection or typed color can produce several Tk writes.
+        # Coalesce them so database and four-plot refresh work runs once.
+        self._extension_job = self.after(120, self._apply_extension_preview)
+
+    def _apply_extension_preview(self):
+        self._extension_job = None
+        if not self.winfo_exists() or not self.live.get() or self._extension_applying:
+            return
+        self._extension_applying = True
+        try:
+            self.extension.apply()
+        finally:
+            self._extension_applying = False
 
     def apply(self):
+        if self._extension_job is not None:
+            try:
+                self.after_cancel(self._extension_job)
+            except tk.TclError:
+                pass
+            self._extension_job = None
         if self.extension is not None:
-            self.extension.apply()
+            self._extension_applying = True
+            try:
+                self.extension.apply()
+            finally:
+                self._extension_applying = False
         self.pane.refresh()
 
     def restore_defaults(self):
@@ -261,6 +291,12 @@ class PlotSettingsWindow(tk.Toplevel):
 
     def _close(self):
         self.pane.cancel_annotation()
+        if getattr(self, "_extension_job", None) is not None:
+            try:
+                self.after_cancel(self._extension_job)
+            except tk.TclError:
+                pass
+            self._extension_job = None
         for variable, token in self._traces:
             try:
                 variable.trace_remove("write", token)

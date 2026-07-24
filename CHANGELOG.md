@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.2 — 2026-07-23
+
+- Fixed the ZetaSizer graph-settings freeze when switching a curve or bar color mode from all-series to per-particle.
+- Prevented live-preview writes from recursively scheduling themselves.
+- Debounced graph-setting previews and avoided redundant batch-label database writes and full library refreshes.
+
 ## 0.7.1 — 2026-07-22
 
 - Added all-series and per-particle color controls to every ZetaSizer distribution and batch graph.

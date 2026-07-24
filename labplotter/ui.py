@@ -1187,7 +1187,10 @@ class SeriesColorSettingsExtension:
         colors = state.setdefault("colors", {})
         for index, (name, variable) in enumerate(self.color_vars.items()):
             colors[name] = normalized_color(variable.get(), SERIES_PALETTE[index % len(SERIES_PALETTE)])
-        self.global_color.set(state["global_color"])
+        # Setting a traced Tk variable always fires its write trace, even when
+        # the text did not change.  Avoid feeding live preview back into itself.
+        if self.global_color.get() != state["global_color"]:
+            self.global_color.set(state["global_color"])
         self.owner.save_color_settings()
 
     def apply(self):
@@ -1248,10 +1251,13 @@ class BatchSettingsExtension(SeriesColorSettingsExtension):
         ttk.Button(parent, text=tr("Reset batch names to automatic JM labels"), command=self.reset_labels).pack(anchor="e", pady=(7, 0))
 
     def apply(self):
+        current = {row["name"]: row.get("plot_label", "") for row in self.owner.library.particles()}
         for name, variable in self.label_vars.items():
-            self.owner.library.set_plot_label(name, variable.get())
+            value = variable.get().strip() or default_particle_label(name)
+            if current.get(name) != value:
+                self.owner.library.set_plot_label(name, value)
         self._store_colors()
-        self.owner.refresh_active()
+        self.owner._refresh()
 
     def variables(self):
         return [*super().variables(), self.statistic, self.error_bars, self.error_type, *self.label_vars.values()]

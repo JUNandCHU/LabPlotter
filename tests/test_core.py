@@ -24,7 +24,7 @@ from labplotter.parsers import detect_builtin_kind
 from labplotter.plotting import PlotOptions, apply_origin_style, font_family_for_text
 from labplotter.processing import asls_baseline, estimate_ftir_baseline, mean_curve, normalize, process_ftir
 from labplotter.storage import FormatProfileStore, ParticleLibrary, default_particle_label
-from labplotter.ui import ZetaTab, resolve_series_color
+from labplotter.ui import SeriesColorSettingsExtension, ZetaTab, resolve_series_color
 
 
 class ProcessingTests(unittest.TestCase):
@@ -214,6 +214,34 @@ class ZetaDashboardTests(unittest.TestCase):
         individual = {"scope": "individual", "global_color": "#ABCDEF", "colors": {"A": "#654321"}}
         self.assertEqual(resolve_series_color(individual, "A", 0, "#123456"), "#654321")
         self.assertEqual(resolve_series_color(individual, "B", 1, "#123456"), "#FF7F0E")
+
+    def test_color_live_preview_does_not_write_unchanged_traced_variable(self):
+        class Variable:
+            def __init__(self, value):
+                self.value = value
+                self.writes = 0
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+                self.writes += 1
+
+        owner = SimpleNamespace(
+            color_settings={
+                "dls_bar": {"scope": "all", "global_color": "#1F77B4", "colors": {}},
+            },
+            save_color_settings=lambda: None,
+        )
+        extension = SeriesColorSettingsExtension.__new__(SeriesColorSettingsExtension)
+        extension.owner = owner
+        extension.plot_key = "dls_bar"
+        extension.color_scope = Variable("One color for all")
+        extension.global_color = Variable("#1F77B4")
+        extension.color_vars = {}
+        extension._store_colors()
+        self.assertEqual(extension.global_color.writes, 0)
 
 
 class ClipboardAndLanguageTests(unittest.TestCase):
