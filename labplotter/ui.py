@@ -18,6 +18,7 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.colors import is_color_like, to_hex
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse, Rectangle
 from PIL import Image, ImageTk
 
@@ -216,6 +217,7 @@ class PlotPane(ttk.Frame):
         self.draw_callback = draw_callback
         self.options = options
         self.default_options = deepcopy(options)
+        self.compact = compact
         self.figure = Figure(figsize=(8.5, 6.2), dpi=100)
         self.axis = self.figure.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.figure, master=self)
@@ -336,19 +338,49 @@ class PlotPane(ttk.Frame):
         try:
             self.draw_callback(self.axis, self.options)
             apply_origin_style(self.figure, self.axis, self.options)
-            handles, labels = self.axis.get_legend_handles_labels()
-            if self.options.legend and handles:
-                legend = self.axis.legend(frameon=False, fontsize=self.options.legend_font_size)
-                ink = "#E8E8E8" if self.options.background == "Dark" else "black"
-                for text in legend.get_texts():
-                    text.set_color(self.options.legend_color or ink)
-                    text.set_fontfamily(font_family_for_text(self.options.legend_font_family or "Arial", text.get_text()))
-                    text.set_fontweight("bold" if self.options.legend_bold else "normal")
+            self._create_legend()
             self.figure.tight_layout()
             self._render_annotations()
             self.canvas.draw_idle()
         except Exception as exc:
             messagebox.showerror(tr("Plot error"), str(exc), parent=self)
+
+    def _create_legend(self):
+        handles, labels = self.axis.get_legend_handles_labels()
+        if not self.options.legend or not handles:
+            return None
+        ink = "#E8E8E8" if self.options.background == "Dark" else "black"
+        if self.compact:
+            maximum = 8
+            hidden = max(0, len(handles) - maximum)
+            handles, labels = list(handles[:maximum]), list(labels[:maximum])
+            if hidden:
+                handles.append(Line2D([], [], color="none", linewidth=0))
+                labels.append(tr("+ {count} more · see Series colors", count=hidden))
+            legend = self.axis.legend(
+                handles,
+                labels,
+                frameon=True,
+                framealpha=0.82,
+                loc="upper right",
+                ncol=2 if len(labels) > 4 else 1,
+                fontsize=max(7.0, min(float(self.options.legend_font_size), 9.0)),
+                borderaxespad=0.35,
+                columnspacing=0.8,
+                handlelength=1.7,
+                handletextpad=0.45,
+                labelspacing=0.35,
+            )
+            # A large legend must never participate in tight-layout sizing:
+            # it may overlay the graph, but it cannot collapse the data axes.
+            legend.set_in_layout(False)
+        else:
+            legend = self.axis.legend(frameon=False, fontsize=self.options.legend_font_size)
+        for text in legend.get_texts():
+            text.set_color(self.options.legend_color or ink)
+            text.set_fontfamily(font_family_for_text(self.options.legend_font_family or "Arial", text.get_text()))
+            text.set_fontweight("bold" if self.options.legend_bold else "normal")
+        return legend
 
     def register_overlay(self, artist):
         """Register an automatic label that follows annotation export visibility."""
@@ -1138,9 +1170,14 @@ class SeriesColorSettingsExtension:
         self.color_scope = tk.StringVar(value=tr(scope_text))
         self.global_color = tk.StringVar(value=state["global_color"])
         self.color_vars: dict[str, tk.StringVar] = {}
+        self._settings_window = None
+
+    def build(self, parent):
+        self.build_colors(parent)
 
     def build_colors(self, parent):
         self.color_vars = {}
+        self._settings_window = parent.winfo_toplevel()
         frame = ttk.LabelFrame(parent, text=tr("Curve and bar colors"), padding=8)
         frame.pack(fill="x", pady=(0, 8))
         ttk.Label(frame, text=tr("Color mode")).grid(row=0, column=0, sticky="e", padx=(4, 3), pady=3)
@@ -1173,11 +1210,15 @@ class SeriesColorSettingsExtension:
             ttk.Button(individual, text=tr("Choose…"), command=lambda item=variable: self._choose_color(item)).grid(row=index, column=2, sticky="w", padx=4, pady=3)
         individual.columnconfigure(0, weight=1)
 
-    @staticmethod
-    def _choose_color(variable: tk.StringVar):
-        selected = colorchooser.askcolor(color=variable.get() or "#1F77B4")[1]
+    def _choose_color(self, variable: tk.StringVar):
+        parent = self._settings_window if self._settings_window and self._settings_window.winfo_exists() else None
+        selected = colorchooser.askcolor(color=variable.get() or "#1F77B4", parent=parent)[1]
         if selected:
             variable.set(selected.upper())
+        if parent is not None and parent.winfo_exists():
+            parent.deiconify()
+            parent.lift()
+            parent.focus_force()
 
     def _store_colors(self):
         state = self.owner.color_settings[self.plot_key]
@@ -1585,33 +1626,116 @@ class ZetaTab(ttk.Frame):
         progress.title(tr("Importing and reading result tables")); progress.transient(self.winfo_toplevel()); progress.resizable(False, False)
         body = ttk.Frame(progress, padding=16); body.pack(fill="both", expand=True)
         status = tk.StringVar(value=tr("Reading workbook data…"))
-        ttk.Label(body, textvariable=status, wraplength=430).pack(anchor="w")
-        bar = ttk.Progressbar(body, mode="indeterminate", length=430); bar.pack(fill="x", pady=(10, 0)); bar.start(10)
+        progress_value = tk.DoubleVar(value=0.0)
+        percent_text = tk.StringVar(value="0%")
+        heading = ttk.Frame(body); heading.pack(fill="x")
+        ttk.Label(heading, textvariable=status, wraplength=520, justify="left").pack(side="left", fill="x", expand=True)
+        ttk.Label(heading, textvariable=percent_text, font=("TkDefaultFont", 10, "bold")).pack(side="right", padx=(12, 0))
+        bar = ttk.Progressbar(body, mode="determinate", maximum=100.0, variable=progress_value, length=520)
+        bar.pack(fill="x", pady=(12, 0))
         progress.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        def report(value: float, message: str):
+            value = max(0.0, min(100.0, float(value)))
+
+            def update():
+                if progress.winfo_exists():
+                    progress_value.set(value)
+                    percent_text.set(f"{round(value):d}%")
+                    status.set(message)
+
+            self.after(0, update)
 
         def worker():
             imported, particles, ocr_count, errors = 0, set(), 0, []
-            for path in paths:
+            parsed: list[tuple[Path, list]] = []
+            file_total = max(1, len(paths))
+            for file_index, raw_path in enumerate(paths, start=1):
+                path = Path(raw_path)
                 try:
-                    measurements = parse_zetasizer_workbook(path)
+                    report(
+                        25.0 * (file_index - 1) / file_total,
+                        tr("Reading file {current}/{total}: {name}", current=file_index, total=file_total, name=path.name),
+                    )
+
+                    def sheet_progress(sheet_index, sheet_total, sheet_name):
+                        fraction = ((file_index - 1) + sheet_index / max(1, sheet_total)) / file_total
+                        report(
+                            25.0 * fraction,
+                            tr(
+                                "Reading file {current}/{total}: {name}\nSheet {sheet}/{sheets}: {sheet_name}",
+                                current=file_index,
+                                total=file_total,
+                                name=path.name,
+                                sheet=sheet_index,
+                                sheets=sheet_total,
+                                sheet_name=sheet_name,
+                            ),
+                        )
+
+                    measurements = parse_zetasizer_workbook(path, progress_callback=sheet_progress)
+                    parsed.append((path, measurements))
+                except Exception as exc:
+                    errors.append(f"{path.name}: {exc}")
+
+            stored: list[tuple[Path, list]] = []
+            for file_index, (path, measurements) in enumerate(parsed, start=1):
+                try:
+                    report(
+                        25.0 + 5.0 * file_index / max(1, len(parsed)),
+                        tr("Storing curves from file {current}/{total}: {name}", current=file_index, total=len(parsed), name=path.name),
+                    )
                     imported += self.library.import_measurements(measurements)
                     particles.update(item.particle_name for item in measurements)
-                    for item in measurements:
-                        if not item.result_png:
-                            continue
-                        try:
-                            result = run_table_ocr(item.result_png)
-                            self.library.save_ocr_result(item.particle_name, item.kind, item.replicate, result.columns, result.rows, result.confidence, result.engine, reviewed=False)
-                            ocr_count += 1
-                        except Exception as exc:
-                            self.library.save_ocr_failure(item.particle_name, item.kind, item.replicate, str(exc))
-                            errors.append(f"{item.particle_name} · {item.kind} M{item.replicate}: {exc}")
+                    stored.append((path, measurements))
                 except Exception as exc:
                     errors.append(f"{Path(path).name}: {exc}")
+
+            ocr_jobs = [
+                (path, item)
+                for path, measurements in stored
+                for item in measurements
+                if item.result_png
+            ]
+            for ocr_index, (path, item) in enumerate(ocr_jobs, start=1):
+                report(
+                    30.0 + 70.0 * (ocr_index - 1) / max(1, len(ocr_jobs)),
+                    tr(
+                        "OCR {current}/{total}: {file}\n{particle} · {kind} measurement {replicate}",
+                        current=ocr_index,
+                        total=len(ocr_jobs),
+                        file=path.name,
+                        particle=item.particle_name,
+                        kind=item.kind,
+                        replicate=item.replicate,
+                    ),
+                )
+                try:
+                    result = run_table_ocr(item.result_png)
+                    self.library.save_ocr_result(item.particle_name, item.kind, item.replicate, result.columns, result.rows, result.confidence, result.engine, reviewed=False)
+                    ocr_count += 1
+                except Exception as exc:
+                    self.library.save_ocr_failure(item.particle_name, item.kind, item.replicate, str(exc))
+                    errors.append(f"{item.particle_name} · {item.kind} M{item.replicate}: {exc}")
+                report(
+                    30.0 + 70.0 * ocr_index / max(1, len(ocr_jobs)),
+                    tr(
+                        "OCR {current}/{total} completed: {particle} · {kind} measurement {replicate}",
+                        current=ocr_index,
+                        total=len(ocr_jobs),
+                        particle=item.particle_name,
+                        kind=item.kind,
+                        replicate=item.replicate,
+                    ),
+                )
+            if not ocr_jobs:
+                report(100.0, tr("Finalizing imported data…"))
             self.after(0, lambda: finished(imported, particles, ocr_count, errors))
 
         def finished(imported, particles, ocr_count, errors):
             if progress.winfo_exists():
+                progress_value.set(100.0)
+                percent_text.set("100%")
                 progress.destroy()
             if imported:
                 self.add_particle_names(sorted(particles))

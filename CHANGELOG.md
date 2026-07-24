@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.3 — 2026-07-23
+
+- Prevented crowded legends from collapsing the DLS and zeta distribution axes; compact dashboards now show up to eight entries plus a remaining-series count.
+- Fixed the missing graph-settings builder for DLS and zeta distribution color controls.
+- Made long instrument-specific graph-setting pages vertically scrollable.
+- Added a determinate ZetaSizer import progress display with live percentage, workbook, sheet, particle, measurement, and OCR task details.
+- Kept the graph-settings window visible behind its parented Windows color chooser.
+
 ## 0.7.2 — 2026-07-23
 
 - Fixed the ZetaSizer graph-settings freeze when switching a curve or bar color mode from all-series to per-particle.

@@ -16,6 +16,34 @@ FONT_FAMILIES = (
 )
 
 
+class ScrollableSettingsFrame(ttk.Frame):
+    """A notebook page whose settings remain reachable for long particle lists."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        background = ttk.Style(self).lookup("TFrame", "background") or "#F0F0F0"
+        self.canvas = tk.Canvas(self, highlightthickness=0, background=background)
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.content = ttk.Frame(self.canvas, padding=10)
+        self._window = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
+        self.content.bind("<Configure>", self._content_changed)
+        self.canvas.bind("<Configure>", self._canvas_changed)
+        self.canvas.bind("<Enter>", lambda _event: self.canvas.bind_all("<MouseWheel>", self._wheel))
+        self.canvas.bind("<Leave>", lambda _event: self.canvas.unbind_all("<MouseWheel>"))
+
+    def _content_changed(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _canvas_changed(self, event):
+        self.canvas.itemconfigure(self._window, width=event.width)
+
+    def _wheel(self, event):
+        self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+
 class PlotSettingsWindow(tk.Toplevel):
     """Non-modal, reusable editor for one PlotPane's visual options."""
 
@@ -23,6 +51,7 @@ class PlotSettingsWindow(tk.Toplevel):
         super().__init__(pane)
         self.pane = pane
         self.title(tr("Graph settings"))
+        self.transient(pane.winfo_toplevel())
         self.geometry("760x700")
         self.minsize(650, 560)
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -48,9 +77,9 @@ class PlotSettingsWindow(tk.Toplevel):
         self._build_fonts(fonts)
         self.extension = getattr(self.pane, "settings_extension", None)
         if self.extension is not None:
-            extra = ttk.Frame(notebook, padding=10)
+            extra = ScrollableSettingsFrame(notebook)
             notebook.add(extra, text=tr(self.extension.title))
-            self.extension.build(extra)
+            self.extension.build(extra.content)
         self._connect_live_preview()
         language_manager.subscribe(self.language_changed)
         localize_widget_tree(self)

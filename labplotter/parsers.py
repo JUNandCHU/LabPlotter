@@ -5,7 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 from openpyxl import load_workbook
@@ -144,11 +144,17 @@ def _sample_from_header(header: str, sheet_name: str) -> str:
     return cleaned or sheet_name
 
 
-def parse_zetasizer_workbook(path: str | Path) -> list[ZetaMeasurement]:
+def parse_zetasizer_workbook(
+    path: str | Path,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> list[ZetaMeasurement]:
     path = Path(path)
     wb = load_workbook(path, data_only=True, read_only=False)
     output: list[ZetaMeasurement] = []
-    for ws in wb.worksheets:
+    total_sheets = max(1, len(wb.worksheets))
+    for sheet_index, ws in enumerate(wb.worksheets, start=1):
+        if progress_callback is not None:
+            progress_callback(sheet_index, total_sheets, ws.title)
         header = str(ws.cell(1, 1).value or "")
         lower = header.lower()
         if "size (d.nm)" in lower:
