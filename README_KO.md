@@ -1,4 +1,4 @@
-# LabPlotter 0.7.3
+# LabPlotter 0.7.4
 
 FTIR, NanoDrop UV–Vis, ZetaSizer 데이터를 로컬에서 불러와 Origin 스타일로 플롯하고 비교하는 Windows 데스크톱 앱입니다. 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 

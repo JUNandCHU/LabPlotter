@@ -1197,7 +1197,7 @@ class SeriesColorSettingsExtension:
         individual.pack(fill="both", expand=True, pady=(0, 8))
         ttk.Label(individual, text=tr("Particle"), font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
         ttk.Label(individual, text=tr("Color"), font=("TkDefaultFont", 9, "bold")).grid(row=0, column=1, sticky="w", padx=4, pady=4)
-        names = self.owner.active_names()
+        names = self.owner.names_for_plot(self.plot_key)
         if not names:
             ttk.Label(individual, text=tr("Add particles to the plots to set individual colors."), foreground="#555555").grid(
                 row=1, column=0, columnspan=3, sticky="w", padx=4, pady=5
@@ -1282,7 +1282,7 @@ class BatchSettingsExtension(SeriesColorSettingsExtension):
         ttk.Label(labels, text=tr("Source particle"), font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
         ttk.Label(labels, text=tr("Batch name on X-axis"), font=("TkDefaultFont", 9, "bold")).grid(row=0, column=1, sticky="w", padx=4, pady=4)
         rows = {row["name"]: row for row in self.owner.library.particles()}
-        for index, name in enumerate(self.owner.active_names(), start=1):
+        for index, name in enumerate(self.owner.names_for_plot(self.plot_key), start=1):
             value = rows.get(name, {}).get("plot_label") or default_particle_label(name)
             variable = tk.StringVar(value=value)
             self.label_vars[name] = variable
@@ -1580,6 +1580,23 @@ class ZetaTab(ttk.Frame):
 
     def active_names(self):
         return [name for name in self.active_particles if name in set(self.tree.get_children())]
+
+    def names_for_plot(self, plot_key: str) -> list[str]:
+        """Return only particles that can actually appear in one dashboard plot."""
+        names = self.active_names()
+        if plot_key in {"dls_curve", "zeta_curve"}:
+            kind = "DLS" if plot_key == "dls_curve" else "Zeta"
+            measurements = self.library.measurements(names, kind)
+            return [name for name in names if measurements.get(name)]
+        if plot_key in {"dls_bar", "zeta_bar"}:
+            kind = "DLS" if plot_key == "dls_bar" else "Zeta"
+            extension = self.dls_batch_settings if kind == "DLS" else self.zeta_batch_settings
+            statistic = canonical(extension.statistic.get()).casefold()
+            prefix = "dls_z" if kind == "DLS" else "zeta_average"
+            rows = {row["name"]: row for row in self.library.particles()}
+            value_key = f"{prefix}_{'median' if statistic == 'median' else 'mean'}"
+            return [name for name in names if rows.get(name, {}).get(value_key) is not None]
+        return names
 
     def add_particle_names(self, names):
         for name in names:

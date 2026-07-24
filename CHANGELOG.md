@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.4 — 2026-07-23
+
+- Filtered each ZetaSizer graph-settings page to the particles actually drawn on that graph.
+- DLS and zeta distribution settings now list only particles with the matching raw measurement kind.
+- DLS Z-average and average-zeta batch settings now list only particles with the corresponding plotted OCR summary value.
+- Preserved hidden per-particle color preferences so they return if that particle later becomes plottable.
+
 ## 0.7.3 — 2026-07-23
 
 - Prevented crowded legends from collapsing the DLS and zeta distribution axes; compact dashboards now show up to eight entries plus a remaining-series count.

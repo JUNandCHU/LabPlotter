@@ -178,6 +178,38 @@ class OCRTests(unittest.TestCase):
 
 
 class ZetaDashboardTests(unittest.TestCase):
+    def test_each_settings_page_lists_only_particles_plotted_on_that_graph(self):
+        with tempfile.TemporaryDirectory() as temp:
+            library = ParticleLibrary(Path(temp) / "library.sqlite3")
+            measurements = [
+                ZetaMeasurement("DLS_with_OCR", "DLS", 1, np.array([10, 20, 30]), np.array([1, 3, 1]), "a.xlsx", "DLS"),
+                ZetaMeasurement("DLS_without_OCR", "DLS", 1, np.array([10, 20, 30]), np.array([1, 2, 1]), "a.xlsx", "DLS"),
+                ZetaMeasurement("Zeta_with_OCR", "Zeta", 1, np.array([-10, 0, 10]), np.array([1, 4, 1]), "a.xlsx", "Zeta"),
+            ]
+            library.import_measurements(measurements)
+            library.save_ocr_result(
+                "DLS_with_OCR", "DLS", 1, OCR_COLUMNS,
+                [["Z-Average (d.nm)", "125", "", "", "", ""]], [[0.99] * 6], "test", reviewed=False,
+            )
+            library.save_ocr_result(
+                "Zeta_with_OCR", "Zeta", 1, OCR_COLUMNS,
+                [["Zeta Potential (mV)", "-22", "", "", "", ""]], [[0.99] * 6], "test", reviewed=False,
+            )
+            variable = lambda value: SimpleNamespace(get=lambda: value)
+            dashboard = SimpleNamespace(
+                library=library,
+                active_names=lambda: ["DLS_with_OCR", "DLS_without_OCR", "Zeta_with_OCR"],
+                dls_batch_settings=SimpleNamespace(statistic=variable("Mean")),
+                zeta_batch_settings=SimpleNamespace(statistic=variable("Mean")),
+            )
+            self.assertEqual(
+                ZetaTab.names_for_plot(dashboard, "dls_curve"),
+                ["DLS_with_OCR", "DLS_without_OCR"],
+            )
+            self.assertEqual(ZetaTab.names_for_plot(dashboard, "zeta_curve"), ["Zeta_with_OCR"])
+            self.assertEqual(ZetaTab.names_for_plot(dashboard, "dls_bar"), ["DLS_with_OCR"])
+            self.assertEqual(ZetaTab.names_for_plot(dashboard, "zeta_bar"), ["Zeta_with_OCR"])
+
     def test_zetasizer_parser_reports_each_sheet(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "zeta.xlsx"
