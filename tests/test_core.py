@@ -13,17 +13,19 @@ from types import SimpleNamespace
 import numpy as np
 from PIL import Image
 from matplotlib.figure import Figure
+from openpyxl import Workbook
 
 from labplotter.clipboard import _configure_windows_clipboard_api, png_to_dib
+from labplotter.config import SettingsStore
 from labplotter.i18n import LanguageManager, canonical, translate_value
 from labplotter.nmr import parse_bruker_zip
 from labplotter.ocr import OCR_COLUMNS, _Token, _table_from_tokens
 from labplotter.models import ZetaMeasurement
-from labplotter.parsers import detect_builtin_kind
+from labplotter.parsers import detect_builtin_kind, parse_zetasizer_workbook
 from labplotter.plotting import PlotOptions, apply_origin_style, font_family_for_text
 from labplotter.processing import asls_baseline, estimate_ftir_baseline, mean_curve, normalize, process_ftir
 from labplotter.storage import FormatProfileStore, ParticleLibrary, default_particle_label
-from labplotter.ui import ZetaTab
+from labplotter.ui import PlotPane, SeriesColorSettingsExtension, ZetaTab, resolve_series_color
 
 
 class ProcessingTests(unittest.TestCase):
@@ -176,6 +178,80 @@ class OCRTests(unittest.TestCase):
 
 
 class ZetaDashboardTests(unittest.TestCase):
+    def test_each_settings_page_lists_only_particles_plotted_on_that_graph(self):
+        with tempfile.TemporaryDirectory() as temp:
+            library = ParticleLibrary(Path(temp) / "library.sqlite3")
+            measurements = [
+                ZetaMeasurement("DLS_with_OCR", "DLS", 1, np.array([10, 20, 30]), np.array([1, 3, 1]), "a.xlsx", "DLS"),
+                ZetaMeasurement("DLS_without_OCR", "DLS", 1, np.array([10, 20, 30]), np.array([1, 2, 1]), "a.xlsx", "DLS"),
+                ZetaMeasurement("Zeta_with_OCR", "Zeta", 1, np.array([-10, 0, 10]), np.array([1, 4, 1]), "a.xlsx", "Zeta"),
+            ]
+            library.import_measurements(measurements)
+            library.save_ocr_result(
+                "DLS_with_OCR", "DLS", 1, OCR_COLUMNS,
+                [["Z-Average (d.nm)", "125", "", "", "", ""]], [[0.99] * 6], "test", reviewed=False,
+            )
+            library.save_ocr_result(
+                "Zeta_with_OCR", "Zeta", 1, OCR_COLUMNS,
+                [["Zeta Potential (mV)", "-22", "", "", "", ""]], [[0.99] * 6], "test", reviewed=False,
+            )
+            variable = lambda value: SimpleNamespace(get=lambda: value)
+            dashboard = SimpleNamespace(
+                library=library,
+                active_names=lambda: ["DLS_with_OCR", "DLS_without_OCR", "Zeta_with_OCR"],
+                dls_batch_settings=SimpleNamespace(statistic=variable("Mean")),
+                zeta_batch_settings=SimpleNamespace(statistic=variable("Mean")),
+            )
+            self.assertEqual(
+                ZetaTab.names_for_plot(dashboard, "dls_curve"),
+                ["DLS_with_OCR", "DLS_without_OCR"],
+            )
+            self.assertEqual(ZetaTab.names_for_plot(dashboard, "zeta_curve"), ["Zeta_with_OCR"])
+            self.assertEqual(ZetaTab.names_for_plot(dashboard, "dls_bar"), ["DLS_with_OCR"])
+            self.assertEqual(ZetaTab.names_for_plot(dashboard, "zeta_bar"), ["Zeta_with_OCR"])
+
+    def test_zetasizer_parser_reports_each_sheet(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "zeta.xlsx"
+            workbook = Workbook()
+            data = workbook.active
+            data.title = "JM10A_Size"
+            for column in (1, 3, 5):
+                data.cell(1, column, "Size (d.nm) - JM10A")
+                data.cell(1, column + 1, "Intensity (%)")
+                for row, value in enumerate((10.0, 20.0, 30.0), start=2):
+                    data.cell(row, column, value)
+                    data.cell(row, column + 1, value / 3)
+            workbook.create_sheet("Notes")
+            workbook.save(path)
+            progress = []
+            measurements = parse_zetasizer_workbook(
+                path,
+                progress_callback=lambda current, total, name: progress.append((current, total, name)),
+            )
+            self.assertEqual(len(measurements), 3)
+            self.assertEqual(progress, [(1, 2, "JM10A_Size"), (2, 2, "Notes")])
+
+    def test_compact_legend_never_collapses_the_plot_axes(self):
+        figure = Figure(figsize=(6, 4))
+        axis = figure.add_subplot(111)
+        for index in range(14):
+            axis.plot([0, 1], [index, index + 1], label=f"Particle_{index:02d}_long_name")
+        pane = SimpleNamespace(
+            axis=axis,
+            compact=True,
+            options=PlotOptions("X", "", "Y", "", legend=True, legend_font_size=11),
+        )
+        legend = PlotPane._create_legend(pane)
+        self.assertIsNotNone(legend)
+        self.assertFalse(legend.get_in_layout())
+        self.assertEqual(len(legend.get_texts()), 9)
+        figure.tight_layout()
+        self.assertGreater(axis.get_position().height, 0.6)
+
+    def test_distribution_color_extension_exposes_settings_builder(self):
+        self.assertTrue(callable(getattr(SeriesColorSettingsExtension, "build", None)))
+
     def test_distribution_peak_overlay_and_batch_summary_bar(self):
         with tempfile.TemporaryDirectory() as temp:
             library = ParticleLibrary(Path(temp) / "library.sqlite3")
@@ -195,6 +271,7 @@ class ZetaDashboardTests(unittest.TestCase):
                 log_x=variable(True), peak_labels=variable(True), multi_peak_labels=variable(False),
                 dls_plot=SimpleNamespace(register_overlay=overlays.append), zeta_plot=SimpleNamespace(register_overlay=lambda artist: None),
                 dls_batch_settings=extension, zeta_batch_settings=extension,
+                series_color=lambda _key, _name, _index: "#123456",
             )
             figure = Figure(); axis = figure.add_subplot(111)
             ZetaTab._draw_kind(dashboard, "DLS", axis, PlotOptions("X", "nm", "Y", "%"))
@@ -204,6 +281,42 @@ class ZetaDashboardTests(unittest.TestCase):
             ZetaTab._draw_batch(dashboard, "DLS", axis, PlotOptions("Batch", "", "Z-average", "nm"))
             self.assertEqual(len(axis.patches), 1)
             self.assertAlmostEqual(axis.patches[0].get_height(), 110)
+            self.assertTrue(np.allclose(axis.patches[0].get_facecolor()[:3], (0x12 / 255, 0x34 / 255, 0x56 / 255)))
+
+    def test_all_and_individual_series_colors(self):
+        all_series = {"scope": "all", "global_color": "#ABCDEF", "colors": {"A": "#000000"}}
+        self.assertEqual(resolve_series_color(all_series, "A", 0, "#123456"), "#ABCDEF")
+        individual = {"scope": "individual", "global_color": "#ABCDEF", "colors": {"A": "#654321"}}
+        self.assertEqual(resolve_series_color(individual, "A", 0, "#123456"), "#654321")
+        self.assertEqual(resolve_series_color(individual, "B", 1, "#123456"), "#FF7F0E")
+
+    def test_color_live_preview_does_not_write_unchanged_traced_variable(self):
+        class Variable:
+            def __init__(self, value):
+                self.value = value
+                self.writes = 0
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+                self.writes += 1
+
+        owner = SimpleNamespace(
+            color_settings={
+                "dls_bar": {"scope": "all", "global_color": "#1F77B4", "colors": {}},
+            },
+            save_color_settings=lambda: None,
+        )
+        extension = SeriesColorSettingsExtension.__new__(SeriesColorSettingsExtension)
+        extension.owner = owner
+        extension.plot_key = "dls_bar"
+        extension.color_scope = Variable("One color for all")
+        extension.global_color = Variable("#1F77B4")
+        extension.color_vars = {}
+        extension._store_colors()
+        self.assertEqual(extension.global_color.writes, 0)
 
 
 class ClipboardAndLanguageTests(unittest.TestCase):
@@ -242,6 +355,16 @@ class ClipboardAndLanguageTests(unittest.TestCase):
             self.assertEqual(canonical("흰색"), "White")
             self.assertEqual(translate_value("Installed version: 0.3.1", "en", "ko"), "설치된 버전: 0.3.1")
             self.assertEqual(canonical("Zeta 전위"), "Zeta")
+
+    def test_external_settings_preserve_language_and_ui_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "settings.json"
+            LanguageManager(path).set("ko")
+            store = SettingsStore(path)
+            store.set("tree_column_widths", {"zetasizer_plot_selection": {"name": 310, "zavg": 145, "zeta": 125}})
+            saved = store.load()
+            self.assertEqual(saved["language"], "ko")
+            self.assertEqual(saved["tree_column_widths"]["zetasizer_plot_selection"]["zavg"], 145)
 
 
 class SolidStateNMRTests(unittest.TestCase):

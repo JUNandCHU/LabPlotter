@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.7.4 — 2026-07-23
+
+- Filtered each ZetaSizer graph-settings page to the particles actually drawn on that graph.
+- DLS and zeta distribution settings now list only particles with the matching raw measurement kind.
+- DLS Z-average and average-zeta batch settings now list only particles with the corresponding plotted OCR summary value.
+- Preserved hidden per-particle color preferences so they return if that particle later becomes plottable.
+
+## 0.7.3 — 2026-07-23
+
+- Prevented crowded legends from collapsing the DLS and zeta distribution axes; compact dashboards now show up to eight entries plus a remaining-series count.
+- Fixed the missing graph-settings builder for DLS and zeta distribution color controls.
+- Made long instrument-specific graph-setting pages vertically scrollable.
+- Added a determinate ZetaSizer import progress display with live percentage, workbook, sheet, particle, measurement, and OCR task details.
+- Kept the graph-settings window visible behind its parented Windows color chooser.
+
+## 0.7.2 — 2026-07-23
+
+- Fixed the ZetaSizer graph-settings freeze when switching a curve or bar color mode from all-series to per-particle.
+- Prevented live-preview writes from recursively scheduling themselves.
+- Debounced graph-setting previews and avoided redundant batch-label database writes and full library refreshes.
+
+## 0.7.1 — 2026-07-22
+
+- Added all-series and per-particle color controls to every ZetaSizer distribution and batch graph.
+- Applied a particle's selected color consistently to replicates, means, SD fills, peak labels, and bars.
+- Persisted the main ZetaSizer selection-list and particle-library column widths in the external user settings file.
+- Preserved saved column layouts and ZetaSizer colors across restarts, upgrades, and rollbacks.
+
 ## 0.7.0 — 2026-07-22
 
 - Split the ZetaSizer plot collection from a separate resizable, detailed particle-library window.

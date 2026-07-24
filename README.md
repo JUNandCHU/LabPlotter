@@ -9,7 +9,7 @@ LabPlotter is a local Windows scientific plotting workbench for FTIR, NanoDrop U
 - Verified `.labpatch` updates with backup and rollback
 - Measurement data remains on the local computer
 
-The current development release is **0.7.0**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
+The current development release is **0.7.4**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
 
 ## Run from source
 
