@@ -1,15 +1,16 @@
 # LabPlotter
 
-LabPlotter is a local Windows scientific plotting workbench for FTIR, NanoDrop UV–Vis, Bruker solid-state NMR, and ZetaSizer DLS/zeta-potential exports.
+LabPlotter is a local Windows scientific workbench for FTIR, NanoDrop UV–Vis, Bruker solid-state NMR, ZetaSizer DLS/zeta-potential exports, and TEM TIFF particle-size screening.
 
 - Origin-style scientific plots with editable axes, fonts, legends, and annotations
 - Multiple-file overlays and instrument-specific processing
 - Four-panel ZetaSizer dashboard with a separate local particle library, automatic OCR summaries, and editable batch labels
+- Batch-aware TEM TIFF analysis with scale calibration, blank/duplicate rejection, reviewable particle overlays, size distributions, and CSV export
 - English/Korean interface
 - Verified `.labpatch` updates with backup and rollback
 - Measurement data remains on the local computer
 
-The current development release is **0.7.4**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
+The current development release is **0.8.0**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
 
 ## Run from source
 

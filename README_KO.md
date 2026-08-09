@@ -1,6 +1,6 @@
-# LabPlotter 0.7.4
+# LabPlotter 0.8.0
 
-FTIR, NanoDrop UV–Vis, ZetaSizer 데이터를 로컬에서 불러와 Origin 스타일로 플롯하고 비교하는 Windows 데스크톱 앱입니다. 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
+FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 로컬에서 불러와 플롯하고 비교·분석하는 Windows 데스크톱 앱입니다. 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
 ## 현재 구현된 기능
 
@@ -93,6 +93,24 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 
 OCR 결과는 편집을 돕는 초안입니다. 소수점·음수 부호·단위가 잘못 인식될 수 있으므로 논문용 수치로 사용하기 전에 반드시 원본 이미지와 대조해야 합니다. OCR은 외부 서버를 사용하지 않으며 이미지, OCR 표와 raw curve의 replicate 연결을 그대로 보존합니다.
 
+### TEM particle size
+
+- 한 개 또는 여러 개의 `.tif`/`.tiff` 이미지를 동시에 가져와 파일명의 배치 이름별로 자동 정리
+- `JM66_PDA_100000X_0003.tif`에서는 `JM66_PDA`를 배치, `100000×`를 배율, `0003`을 이미지 번호로 분리
+- 독립 합성 배치 수, 포함 이미지 수와 검출 입자 수를 서로 분리해 표시
+- TIFF의 SHA-256을 비교해 이름만 `(1)`처럼 달라진 완전히 동일한 이미지는 중복 계산하지 않음
+- 정보량·밝기 분포·윤곽 밀도로 검은 빈 화면을 감지해 기본적으로 자동 제외
+- Hitachi H-D2300/Gatan 이미지의 밝은 scale bar 길이와 파일명 배율로 표시 스케일을 자동 추정
+- 자동 보정된 scale 값, bar pixel 길이와 nm/pixel 값을 이미지별로 직접 수정하고 재분석 가능
+- 최소/최대 입자 직경, 최소 중심 간격, threshold factor 및 경계 입자 제외 여부 조절
+- 자동 빈 화면을 사용자가 강제로 분석하거나, 각 이미지를 포함/제외 상태로 전환 가능
+- 원본 TIFF 위에 검출된 등가 원을 겹쳐 보며 segmentation 결과 검수
+- 선택한 배치의 equivalent particle diameter 분포와 중앙값을 Origin 스타일 그래프로 표시
+- 선택 이미지 또는 전체 라이브러리의 개별 입자 직경을 CSV로 내보내기
+- 원본 TIFF는 체크섬 이름으로 `%LOCALAPPDATA%\LabPlotter\tem_images`에 한 번만 복사하고, 분석 결과와 검수 설정은 별도 SQLite library에 저장
+
+TEM 입자 크기는 자동 segmentation을 이용한 선별용 추정값입니다. 특히 입자가 겹치거나 응집된 영상에서는 검출 원을 반드시 검토하고 threshold 및 중심 간격을 조정해야 합니다. 서로 다른 배율의 이미지를 합치면 `N_image`와 `N_particle`은 증가하지만 독립적인 합성 배치 `N_batch`가 증가하는 것은 아닙니다.
+
 ### 그래프와 custom format
 
 - bottom/left major tick은 안쪽 방향
@@ -164,6 +182,8 @@ Windows에서는 다음 폴더에 particle library와 custom format profile이 �
 `%LOCALAPPDATA%\LabPlotter`
 
 - `particle_library.sqlite3`: ZetaSizer raw curves와 result-table images
+- `tem_particle_library.sqlite3`: TEM 이미지별 보정값, 분석 설정 및 입자 크기 결과
+- `tem_images`: 중복 제거된 로컬 TIFF 원본
 - `format_profiles.json`: custom Excel format mappings
 
 같은 workbook을 다시 import하면 같은 particle/measurement 항목을 업데이트하므로 중복이 누적되지 않습니다.
@@ -174,3 +194,5 @@ Windows에서는 다음 폴더에 particle library와 custom format profile이 �
 - Baseline과 normalization은 화면 표시 및 export에만 적용됩니다.
 - 자동 peak marking은 후보 위치를 찾는 보조 기능입니다. 작용기 assignment를 확정하지 않습니다.
 - 서로 다른 X grid의 ZetaSizer triplicate는 공통 overlap 범위에 interpolation한 뒤 평균과 표준편차를 계산합니다.
+- TEM 입자 분할은 등가 직경의 자동 추정이며, 겹친 입자·응집체·낮은 대비 영상에서는 원본 오버레이 검수가 필요합니다.
+- TEM 통계는 `N_batch`, `N_image`, `N_particle`을 구분하며 개별 입자를 독립 합성 replicate처럼 해석하지 않습니다.

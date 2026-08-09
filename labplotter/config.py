@@ -27,6 +27,16 @@ def database_path() -> Path:
     return data_dir() / "particle_library.sqlite3"
 
 
+def tem_database_path() -> Path:
+    return data_dir() / "tem_particle_library.sqlite3"
+
+
+def tem_images_dir() -> Path:
+    path = data_dir() / "tem_images"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def profiles_path() -> Path:
     return data_dir() / "format_profiles.json"
 

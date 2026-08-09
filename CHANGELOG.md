@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 — 2026-07-23
+
+- Added a dedicated TEM particle-size tab for one or many TIFF images.
+- Grouped files into batches from filenames while keeping independent batch, image, and detected-particle counts separate.
+- Added automatic Hitachi H-D2300/Gatan scale-bar detection and editable nm/px calibration.
+- Added local dark-particle segmentation with adjustable diameter, center-distance, threshold, border, and blank-field controls.
+- Added exact SHA-256 duplicate rejection and automatic blank-field exclusion with a reversible review state.
+- Added original-image detection overlays, per-batch size-distribution plots, and particle-level CSV export.
+- Added a persistent local TEM library whose images and reviewed settings survive application updates.
+- Added English/Korean UI text and deterministic TEM analysis, calibration, blank, duplicate, and storage tests.
+
 ## 0.7.4 — 2026-07-23
 
 - Filtered each ZetaSizer graph-settings page to the particles actually drawn on that graph.
