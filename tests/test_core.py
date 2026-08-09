@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import ctypes
+import shutil
 import sqlite3
 import zipfile
 from contextlib import closing
@@ -25,6 +26,13 @@ from labplotter.parsers import detect_builtin_kind, parse_zetasizer_workbook
 from labplotter.plotting import PlotOptions, apply_origin_style, font_family_for_text
 from labplotter.processing import asls_baseline, estimate_ftir_baseline, mean_curve, normalize, process_ftir
 from labplotter.storage import FormatProfileStore, ParticleLibrary, default_particle_label
+from labplotter.tem import (
+    TEMAnalysisParameters,
+    TEMLibrary,
+    analyze_tem_image,
+    import_tem_paths,
+    parse_tem_filename,
+)
 from labplotter.ui import PlotPane, SeriesColorSettingsExtension, ZetaTab, resolve_series_color
 
 
@@ -162,6 +170,53 @@ class StorageTests(unittest.TestCase):
             library.import_measurements([ZetaMeasurement("Keep", "DLS", 1, np.array([1]), np.array([2]), "a.xlsx", "A")])
             reopened = ParticleLibrary(path)
             self.assertEqual(reopened.particles()[0]["name"], "Keep")
+
+
+class TEMAnalysisTests(unittest.TestCase):
+    @staticmethod
+    def _write_tem(path: Path, blank: bool = False) -> None:
+        image = np.zeros((512, 512), dtype=np.uint8) if blank else np.full((512, 512), 230, dtype=np.uint8)
+        if not blank:
+            yy, xx = np.ogrid[:512, :512]
+            for center_x, center_y in ((120, 120), (300, 120), (160, 300), (340, 310)):
+                image[(xx - center_x) ** 2 + (yy - center_y) ** 2 <= 50 ** 2] = 60
+        image[475:479, 30:130] = 254
+        Image.fromarray(image, mode="L").save(path)
+
+    def test_filename_batch_magnification_and_tiff_detection(self):
+        identity = parse_tem_filename("JM66_PDA_100000X_0003.tif")
+        self.assertEqual(identity.batch_name, "JM66_PDA")
+        self.assertEqual(identity.magnification, 100000)
+        self.assertEqual(identity.frame, "0003")
+        self.assertEqual(detect_builtin_kind("example.tiff"), "TEM")
+
+    def test_scale_blank_detection_segmentation_and_duplicate_library(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            valid = root / "Batch_A_50000X_0001.tif"
+            duplicate = root / "Batch_A_50000X_0001(1).tif"
+            blank = root / "Batch_A_50000X_0002.tif"
+            self._write_tem(valid)
+            shutil.copy2(valid, duplicate)
+            self._write_tem(blank, blank=True)
+
+            analysis = analyze_tem_image(valid, TEMAnalysisParameters(maximum_diameter_nm=500))
+            self.assertEqual(analysis.status, "analyzed")
+            self.assertAlmostEqual(analysis.calibration.bar_pixels, 100, delta=2)
+            self.assertAlmostEqual(analysis.calibration.nm_per_pixel, 2.0, delta=0.1)
+            self.assertEqual(analysis.particle_count, 4)
+            self.assertAlmostEqual(float(np.median(analysis.diameters_nm)), 200, delta=20)
+            self.assertEqual(analyze_tem_image(blank).status, "blank")
+
+            library = TEMLibrary(root / "tem.sqlite3", root / "stored")
+            result = import_tem_paths((valid, duplicate, blank), library)
+            self.assertEqual(len(result["imported"]), 2)
+            self.assertEqual(len(result["duplicates"]), 1)
+            self.assertEqual(len(result["blank"]), 1)
+            summary = library.batch_summary()[0]
+            self.assertEqual(summary["image_count"], 2)
+            self.assertEqual(summary["included_images"], 1)
+            self.assertEqual(summary["particle_count"], 4)
 
 
 class OCRTests(unittest.TestCase):

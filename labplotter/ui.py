@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import math
 import os
 import re
 import subprocess
@@ -19,7 +21,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.colors import is_color_like, to_hex
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
-from matplotlib.patches import Ellipse, Rectangle
+from matplotlib.patches import Circle, Ellipse, Rectangle
 from PIL import Image, ImageTk
 
 from . import __version__
@@ -42,6 +44,13 @@ from .plot_settings import AnnotationWindow, PlotSettingsWindow
 from .plotting import AnnotationSpec, PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text
 from .processing import ftir_peak_indices, mean_curve, process_ftir
 from .storage import FormatProfileStore, ParticleLibrary, default_particle_label
+from .tem import (
+    TIFF_SUFFIXES,
+    TEMAnalysisParameters,
+    TEMLibrary,
+    import_tem_paths,
+    load_tem_grayscale,
+)
 
 
 FTIR_RANGES = (
@@ -949,6 +958,623 @@ class SSNMRTab(ttk.Frame):
     def _refresh(self):
         if hasattr(self, "plot"):
             self.plot.refresh()
+
+
+class TEMTab(ttk.Frame):
+    """Reviewable TEM particle-size screening workflow.
+
+    TIFFs are grouped by the batch portion of the filename. Independent image
+    and detected-particle counts remain visible separately so adding fields or
+    magnifications cannot be mistaken for adding independent synthesis batches.
+    """
+
+    def __init__(self, parent, library: TEMLibrary):
+        super().__init__(parent)
+        self.library = library
+        self.settings_store = SettingsStore()
+        self._batch_nodes: dict[str, str] = {}
+        self._node_batches: dict[str, str] = {}
+        self._loading_form = False
+
+        paned = ttk.Panedwindow(self, orient="horizontal")
+        paned.pack(fill="both", expand=True)
+        controls = ttk.Frame(paned, padding=8, width=560)
+        workspace = ttk.Frame(paned, padding=5)
+        paned.add(controls, weight=1)
+        paned.add(workspace, weight=3)
+
+        actions = ttk.Frame(controls)
+        actions.pack(fill="x")
+        ttk.Button(actions, text="Open TEM TIFF(s)…", command=self.import_dialog).pack(side="left")
+        ttk.Button(actions, text="Export particle CSV…", command=self.export_csv).pack(side="left", padx=4)
+        ttk.Button(actions, text="Delete selected…", command=self.delete_selected).pack(side="left")
+
+        ttk.Label(
+            controls,
+            text="Files are grouped by batch. Blank fields and exact duplicates are skipped automatically.",
+            foreground="#555555",
+            wraplength=530,
+        ).pack(anchor="w", pady=(7, 4))
+
+        default_font = tkfont.nametofont("TkDefaultFont")
+        style = ttk.Style(self)
+        style.configure("TEM.Treeview", rowheight=max(32, int(default_font.metrics("linespace") * 1.75)), padding=(4, 4))
+        style.configure(
+            "TEM.Treeview.Heading",
+            font=(default_font.actual("family"), default_font.actual("size"), "bold"),
+            padding=(4, 6),
+        )
+        tree_frame = ttk.Frame(controls)
+        tree_frame.pack(fill="both", expand=True)
+        columns = ("magnification", "scale", "status", "particles", "median")
+        self.tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="tree headings",
+            selectmode="extended",
+            style="TEM.Treeview",
+        )
+        self.tree.heading("#0", text=tr("Batch / image"))
+        definitions = (
+            ("magnification", "Magnification", 100),
+            ("scale", "Calibration", 125),
+            ("status", "Status", 145),
+            ("particles", "Particle n", 90),
+            ("median", "Median size", 110),
+        )
+        self.tree.column("#0", width=245, minwidth=150, stretch=True)
+        for key, label, width in definitions:
+            self.tree.heading(key, text=tr(label))
+            self.tree.column(key, width=width, minwidth=75, stretch=key == "status")
+        self._column_widths = TreeColumnWidthState(
+            self.tree,
+            self.settings_store,
+            "tem_analysis_library",
+            ("#0", *columns),
+        )
+        ybar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        xbar = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        ybar.grid(row=0, column=1, sticky="ns")
+        xbar.grid(row=1, column=0, sticky="ew")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+        self.tree.bind("<<TreeviewSelect>>", self._selection_changed)
+        self.tree.bind("<Double-1>", lambda _event: self.rename_batch())
+
+        row = ttk.Frame(controls)
+        row.pack(fill="x", pady=(5, 0))
+        ttk.Button(row, text="Include / exclude", command=self.toggle_included).pack(side="left")
+        ttk.Button(row, text="Rename batch…", command=self.rename_batch).pack(side="left", padx=4)
+        ttk.Button(row, text="Reanalyze selected", command=self.reanalyze_selected).pack(side="left")
+
+        self.summary_text = tk.StringVar()
+        ttk.Label(
+            controls,
+            textvariable=self.summary_text,
+            foreground="#25313C",
+            wraplength=530,
+            justify="left",
+        ).pack(anchor="w", pady=(7, 0))
+        ttk.Label(
+            controls,
+            text="Extra images increase image and particle sampling, not the independent batch n.",
+            foreground="#8A4B08",
+            wraplength=530,
+        ).pack(anchor="w", pady=(3, 0))
+
+        notebook = ttk.Notebook(workspace)
+        notebook.pack(fill="both", expand=True)
+        distribution_frame = ttk.Frame(notebook, padding=3)
+        review_frame = ttk.Frame(notebook, padding=5)
+        notebook.add(distribution_frame, text=tr("Size distribution"))
+        notebook.add(review_frame, text=tr("Segmentation review"))
+
+        options = PlotOptions(
+            "Equivalent particle diameter",
+            "nm",
+            "Probability density",
+            "",
+            line_width=2.2,
+            legend=True,
+        )
+        self.plot = PlotPane(distribution_frame, self._draw_distribution, options)
+        self.plot.pack(fill="both", expand=True)
+        self.plot_panes = (self.plot,)
+
+        review_frame.rowconfigure(0, weight=1)
+        review_frame.columnconfigure(0, weight=1)
+        preview_box = ttk.LabelFrame(review_frame, text=tr("Detection overlay"), padding=3)
+        preview_box.grid(row=0, column=0, sticky="nsew")
+        self.preview_figure = Figure(figsize=(7.2, 6.2), dpi=100)
+        self.preview_axis = self.preview_figure.add_subplot(111)
+        self.preview_canvas = FigureCanvasTkAgg(self.preview_figure, master=preview_box)
+        self.preview_canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        settings = ttk.LabelFrame(review_frame, text=tr("Selected image analysis"), padding=8)
+        settings.grid(row=0, column=1, sticky="ns", padx=(6, 0))
+        self.batch_var = tk.StringVar()
+        self.scale_var = tk.StringVar()
+        self.bar_pixels_var = tk.StringVar()
+        self.minimum_var = tk.StringVar(value="50")
+        self.maximum_var = tk.StringVar(value="1000")
+        self.separation_var = tk.StringVar(value="75")
+        self.threshold_var = tk.StringVar(value="1.0")
+        self.exclude_border_var = tk.BooleanVar(value=True)
+        self.force_blank_var = tk.BooleanVar(value=False)
+        self.overlay_var = tk.BooleanVar(value=True)
+        self.review_status = tk.StringVar(value=tr("Select an image to review."))
+        fields = (
+            ("Batch name", self.batch_var),
+            ("Printed scale value (nm)", self.scale_var),
+            ("Detected bar length (px)", self.bar_pixels_var),
+            ("Minimum diameter (nm)", self.minimum_var),
+            ("Maximum diameter (nm)", self.maximum_var),
+            ("Minimum center distance (nm)", self.separation_var),
+            ("Threshold factor", self.threshold_var),
+        )
+        for row_number, (label, variable) in enumerate(fields):
+            ttk.Label(settings, text=label).grid(row=row_number, column=0, sticky="w", pady=2)
+            ttk.Entry(settings, textvariable=variable, width=18).grid(row=row_number, column=1, sticky="ew", padx=(6, 0), pady=2)
+        next_row = len(fields)
+        ttk.Checkbutton(
+            settings,
+            text="Exclude particles touching image borders",
+            variable=self.exclude_border_var,
+        ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        ttk.Checkbutton(
+            settings,
+            text="Force analysis of an auto-blank field",
+            variable=self.force_blank_var,
+        ).grid(row=next_row + 1, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(
+            settings,
+            text="Show detected-particle overlay",
+            variable=self.overlay_var,
+            command=self._draw_preview,
+        ).grid(row=next_row + 2, column=0, columnspan=2, sticky="w")
+        ttk.Button(
+            settings,
+            text="Apply and reanalyze image",
+            command=self.reanalyze_selected,
+        ).grid(row=next_row + 3, column=0, columnspan=2, sticky="ew", pady=(7, 0))
+        ttk.Label(
+            settings,
+            textvariable=self.review_status,
+            wraplength=300,
+            justify="left",
+            foreground="#555555",
+        ).grid(row=next_row + 4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(
+            settings,
+            text="This is a screening estimate. Confirm the scale and detection overlay before reporting particle sizes.",
+            wraplength=300,
+            justify="left",
+            foreground="#8A4B08",
+        ).grid(row=next_row + 5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        settings.columnconfigure(1, weight=1)
+        self._refresh()
+
+    @staticmethod
+    def _number(value, suffix="") -> str:
+        return "—" if value is None else f"{float(value):.4g}{suffix}"
+
+    @staticmethod
+    def _status_text(record: dict) -> str:
+        names = {
+            "analyzed": "Analyzed",
+            "blank": "Blank · skipped",
+            "needs_scale": "Needs scale",
+        }
+        status = tr(names.get(record["status"], str(record["status"])))
+        if record["status"] == "analyzed" and not record["included"]:
+            status += f" · {tr('Excluded')}"
+        return status
+
+    def import_dialog(self):
+        self.add_paths(
+            filedialog.askopenfilenames(
+                parent=self,
+                filetypes=((tr("TEM TIFF images"), "*.tif *.tiff"), (tr("All files"), "*.*")),
+            )
+        )
+
+    def add_paths(self, paths):
+        paths = tuple(str(path) for path in paths if Path(path).suffix.casefold() in TIFF_SUFFIXES)
+        if not paths:
+            return
+        progress = tk.Toplevel(self)
+        progress.title(tr("TEM particle analysis"))
+        progress.transient(self.winfo_toplevel())
+        progress.resizable(False, False)
+        body = ttk.Frame(progress, padding=16)
+        body.pack(fill="both", expand=True)
+        status = tk.StringVar(value=tr("Preparing TIFF analysis…"))
+        progress_value = tk.DoubleVar(value=0.0)
+        percent = tk.StringVar(value="0%")
+        heading = ttk.Frame(body)
+        heading.pack(fill="x")
+        ttk.Label(heading, textvariable=status, wraplength=520, justify="left").pack(side="left", fill="x", expand=True)
+        ttk.Label(heading, textvariable=percent, font=("TkDefaultFont", 10, "bold")).pack(side="right", padx=(12, 0))
+        ttk.Progressbar(body, maximum=100.0, variable=progress_value, length=540).pack(fill="x", pady=(12, 0))
+        progress.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        def report(current, total, name):
+            value = 100.0 * (current - 1) / max(1, total)
+
+            def update():
+                if progress.winfo_exists():
+                    progress_value.set(value)
+                    percent.set(f"{round(value):d}%")
+                    status.set(tr("Analyzing TIFF {current}/{total}: {name}", current=current, total=total, name=name))
+
+            self.after(0, update)
+
+        def worker():
+            result = import_tem_paths(paths, self.library, TEMAnalysisParameters(), report)
+            self.after(0, lambda: finish(result))
+
+        def finish(result):
+            if progress.winfo_exists():
+                progress_value.set(100.0)
+                percent.set("100%")
+                progress.destroy()
+            self._refresh(select_image_ids=result["imported"])
+            imported = len(result["imported"])
+            message = tr(
+                "Imported {images} unique TIFF images. Auto-skipped: {blank} blank, {duplicates} duplicate. Needs manual scale: {scale}.",
+                images=imported,
+                blank=len(result["blank"]),
+                duplicates=len(result["duplicates"]),
+                scale=len(result["needs_scale"]),
+            )
+            if result["errors"]:
+                message += "\n\n" + tr("Errors:") + "\n" + "\n".join(result["errors"][:10])
+            messagebox.showinfo(tr("TEM particle analysis"), message, parent=self)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _selected_image_ids(self) -> list[int]:
+        identifiers: list[int] = []
+        for node in self.tree.selection():
+            if node.startswith("image:"):
+                identifiers.append(int(node.split(":", 1)[1]))
+            elif node.startswith("batch:"):
+                identifiers.extend(int(child.split(":", 1)[1]) for child in self.tree.get_children(node))
+        return list(dict.fromkeys(identifiers))
+
+    def _selected_batches(self) -> list[str]:
+        batches = []
+        for node in self.tree.selection():
+            if node in self._node_batches:
+                batches.append(self._node_batches[node])
+        return list(dict.fromkeys(batches))
+
+    def _selected_record(self) -> dict | None:
+        identifiers = self._selected_image_ids()
+        if not identifiers:
+            return None
+        records = self.library.images([identifiers[0]])
+        return records[0] if records else None
+
+    def _selection_changed(self, _event=None):
+        self._load_review()
+        self._update_summary()
+        self.plot.refresh()
+
+    def _refresh(self, select_image_ids=()):
+        keep = set(self.tree.selection())
+        requested = {f"image:{int(value)}" for value in select_image_ids}
+        self.tree.delete(*self.tree.get_children())
+        self._batch_nodes.clear()
+        self._node_batches.clear()
+        summaries = {row["batch_name"]: row for row in self.library.batch_summary()}
+        records = self.library.images()
+        for batch in sorted({item["batch_name"] for item in records}, key=str.casefold):
+            summary = summaries.get(batch, {})
+            node = f"batch:{len(self._batch_nodes)}"
+            self._batch_nodes[batch] = node
+            self._node_batches[node] = batch
+            self.tree.insert(
+                "",
+                "end",
+                iid=node,
+                text=batch,
+                open=True,
+                values=(
+                    "",
+                    tr("{count} included images", count=summary.get("included_images", 0)),
+                    tr("{count} total images", count=summary.get("image_count", 0)),
+                    summary.get("particle_count", 0),
+                    self._number(summary.get("median_nm"), " nm"),
+                ),
+            )
+            for record in (item for item in records if item["batch_name"] == batch):
+                image_node = f"image:{record['id']}"
+                self._node_batches[image_node] = batch
+                magnification = "—" if record["magnification"] is None else f"{record['magnification']:g}×"
+                calibration = self._number(record["nm_per_pixel"], " nm/px")
+                median = float(np.median(record["diameters_nm"])) if record["diameters_nm"] else None
+                self.tree.insert(
+                    node,
+                    "end",
+                    iid=image_node,
+                    text=record["source_name"],
+                    values=(
+                        magnification,
+                        calibration,
+                        self._status_text(record),
+                        record["particle_count"],
+                        self._number(median, " nm"),
+                    ),
+                )
+        targets = requested or keep
+        for node in targets:
+            if self.tree.exists(node):
+                self.tree.selection_add(node)
+        if requested:
+            first = next(iter(requested), None)
+            if first and self.tree.exists(first):
+                self.tree.see(first)
+        self._load_review()
+        self._update_summary()
+        if hasattr(self, "plot"):
+            self.plot.refresh()
+
+    def _update_summary(self):
+        selected_batches = self._selected_batches()
+        summaries = self.library.batch_summary(selected_batches or None)
+        batch_count = len(summaries)
+        image_count = sum(row["included_images"] for row in summaries)
+        particle_count = sum(row["particle_count"] for row in summaries)
+        blank_count = sum(row["blank_images"] for row in summaries)
+        self.summary_text.set(
+            tr(
+                "Independent batches: {batches} · included images: {images} · detected particles: {particles} · blank images: {blank}",
+                batches=batch_count,
+                images=image_count,
+                particles=particle_count,
+                blank=blank_count,
+            )
+        )
+
+    def _load_review(self):
+        record = self._selected_record()
+        self._loading_form = True
+        try:
+            if not record:
+                self.review_status.set(tr("Select an image to review."))
+                self._draw_preview()
+                return
+            parameters = record["parameters"]
+            self.batch_var.set(record["batch_name"])
+            self.scale_var.set("" if record["scale_nm"] is None else f"{record['scale_nm']:g}")
+            self.bar_pixels_var.set("" if record["bar_pixels"] is None else f"{record['bar_pixels']:g}")
+            self.minimum_var.set(f"{parameters.minimum_diameter_nm:g}")
+            self.maximum_var.set(f"{parameters.maximum_diameter_nm:g}")
+            self.separation_var.set(f"{parameters.minimum_center_distance_nm:g}")
+            self.threshold_var.set(f"{parameters.threshold_factor:g}")
+            self.exclude_border_var.set(parameters.exclude_border_particles)
+            self.force_blank_var.set(parameters.force_analyze_blank)
+            details = [
+                self._status_text(record),
+                tr("Detected particles: {count}", count=record["particle_count"]),
+            ]
+            if record["foreground_fraction"] is not None:
+                details.append(tr("Segmented area: {percent:.1f}%", percent=100.0 * record["foreground_fraction"]))
+            if record["warning"]:
+                details.append(tr(record["warning"]))
+            self.review_status.set("\n".join(details))
+        finally:
+            self._loading_form = False
+        self._draw_preview()
+
+    def _draw_preview(self):
+        self.preview_axis.clear()
+        record = self._selected_record()
+        if not record or not Path(record["stored_path"]).exists():
+            self.preview_axis.text(
+                0.5,
+                0.5,
+                tr("Select an image to review."),
+                ha="center",
+                va="center",
+                transform=self.preview_axis.transAxes,
+            )
+            self.preview_axis.set_axis_off()
+            self.preview_canvas.draw_idle()
+            return
+        image = load_tem_grayscale(record["stored_path"])
+        self.preview_axis.imshow(image, cmap="gray", vmin=0, vmax=255)
+        if self.overlay_var.get():
+            for x, y, radius in record["centers_px"]:
+                self.preview_axis.add_patch(
+                    Circle((x, y), radius, fill=False, edgecolor="#00E5FF", linewidth=1.1, alpha=0.9)
+                )
+            if record["analysis_bottom"] is not None:
+                self.preview_axis.axhline(record["analysis_bottom"], color="#FFD54F", linestyle="--", linewidth=1.0)
+        self.preview_axis.set_title(
+            f"{record['source_name']} · {record['particle_count']} {tr('particles')}",
+            fontsize=10,
+        )
+        self.preview_axis.set_axis_off()
+        self.preview_figure.tight_layout()
+        self.preview_canvas.draw_idle()
+
+    def _read_parameters(self) -> TEMAnalysisParameters:
+        try:
+            return TEMAnalysisParameters(
+                minimum_diameter_nm=float(self.minimum_var.get()),
+                maximum_diameter_nm=float(self.maximum_var.get()),
+                minimum_center_distance_nm=float(self.separation_var.get()),
+                threshold_factor=float(self.threshold_var.get()),
+                exclude_border_particles=bool(self.exclude_border_var.get()),
+                force_analyze_blank=bool(self.force_blank_var.get()),
+            ).normalized()
+        except ValueError as exc:
+            raise ValueError(tr("Analysis settings must be numeric.")) from exc
+
+    def reanalyze_selected(self):
+        record = self._selected_record()
+        if not record:
+            messagebox.showinfo(tr("TEM particle analysis"), tr("Select one image first."), parent=self)
+            return
+        try:
+            parameters = self._read_parameters()
+            scale_nm = float(self.scale_var.get())
+            bar_pixels = float(self.bar_pixels_var.get())
+            if scale_nm <= 0 or bar_pixels <= 0:
+                raise ValueError(tr("Scale value and bar length must be positive."))
+            updated = self.library.reanalyze(
+                record["id"],
+                parameters,
+                batch_name=self.batch_var.get().strip() or record["batch_name"],
+                scale_nm=scale_nm,
+                bar_pixels=bar_pixels,
+            )
+            self._refresh(select_image_ids=[updated["id"]])
+        except Exception as exc:
+            messagebox.showerror(tr("TEM particle analysis"), str(exc), parent=self)
+
+    def toggle_included(self):
+        identifiers = self._selected_image_ids()
+        if not identifiers:
+            return
+        records = self.library.images(identifiers)
+        include = not all(record["included"] for record in records)
+        self.library.set_included(identifiers, include)
+        self._refresh(select_image_ids=identifiers)
+
+    def rename_batch(self):
+        batches = self._selected_batches()
+        if len(batches) != 1:
+            messagebox.showinfo(tr("Rename batch"), tr("Select one batch or image first."), parent=self)
+            return
+        value = simpledialog.askstring(
+            tr("Rename batch"),
+            tr("Batch name"),
+            initialvalue=batches[0],
+            parent=self,
+        )
+        if value and value.strip() and value.strip() != batches[0]:
+            self.library.rename_batch(batches[0], value.strip())
+            self._refresh()
+
+    def delete_selected(self):
+        identifiers = self._selected_image_ids()
+        if not identifiers:
+            return
+        if messagebox.askyesno(
+            tr("Delete TEM images"),
+            tr(
+                "Delete {count} selected imported images and their particle-size results? This cannot be undone.",
+                count=len(identifiers),
+            ),
+            parent=self,
+        ):
+            self.library.delete_images(identifiers)
+            self._refresh()
+
+    def export_csv(self):
+        identifiers = self._selected_image_ids()
+        records = self.library.images(identifiers or None)
+        if not records:
+            messagebox.showinfo(tr("Export particle CSV"), tr("No TEM results are available."), parent=self)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            defaultextension=".csv",
+            filetypes=((tr("CSV data"), "*.csv"), (tr("All files"), "*.*")),
+        )
+        if not path:
+            return
+        with Path(path).open("w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(
+                (
+                    "Batch",
+                    "Image",
+                    "Magnification",
+                    "Scale_nm",
+                    "nm_per_pixel",
+                    "Image_status",
+                    "Image_included",
+                    "Particle_index",
+                    "Equivalent_diameter_nm",
+                )
+            )
+            for record in records:
+                if record["diameters_nm"]:
+                    for index, diameter in enumerate(record["diameters_nm"], start=1):
+                        writer.writerow(
+                            (
+                                record["batch_name"],
+                                record["source_name"],
+                                record["magnification"],
+                                record["scale_nm"],
+                                record["nm_per_pixel"],
+                                record["status"],
+                                int(record["included"]),
+                                index,
+                                diameter,
+                            )
+                        )
+                else:
+                    writer.writerow(
+                        (
+                            record["batch_name"],
+                            record["source_name"],
+                            record["magnification"],
+                            record["scale_nm"],
+                            record["nm_per_pixel"],
+                            record["status"],
+                            int(record["included"]),
+                            "",
+                            "",
+                        )
+                    )
+
+    def _draw_distribution(self, axis, options):
+        selected = self._selected_batches()
+        records = self.library.images()
+        grouped: dict[str, list[float]] = {}
+        for record in records:
+            if selected and record["batch_name"] not in selected:
+                continue
+            if record["status"] == "analyzed" and record["included"]:
+                grouped.setdefault(record["batch_name"], []).extend(record["diameters_nm"])
+        all_values = np.asarray([value for values in grouped.values() for value in values], dtype=float)
+        if not all_values.size:
+            axis.text(
+                0.5,
+                0.5,
+                tr("Open one or more TEM TIFF images"),
+                ha="center",
+                va="center",
+                transform=axis.transAxes,
+            )
+            return
+        if np.ptp(all_values) <= 1e-9:
+            bins = np.linspace(all_values[0] - 0.5, all_values[0] + 0.5, 5)
+        else:
+            count = max(12, min(50, int(round(math.sqrt(all_values.size)))))
+            bins = np.linspace(float(np.min(all_values)), float(np.max(all_values)), count + 1)
+        for index, batch in enumerate(sorted(grouped, key=str.casefold)):
+            values = np.asarray(grouped[batch], dtype=float)
+            if not values.size:
+                continue
+            color = SERIES_PALETTE[index % len(SERIES_PALETTE)]
+            axis.hist(
+                values,
+                bins=bins,
+                density=True,
+                histtype="step",
+                linewidth=options.line_width,
+                color=color,
+                label=f"{batch} (n={values.size})",
+            )
+            axis.axvline(float(np.median(values)), color=color, linestyle="--", linewidth=max(0.8, options.line_width * 0.65), alpha=0.8)
 
 
 class ZoomImageViewer(ttk.Frame):
@@ -2132,11 +2758,13 @@ class LabPlotterApp(tk.Tk):
         self.nano = NanoDropTab(self.notebook)
         self.nmr = SSNMRTab(self.notebook)
         self.zeta = ZetaTab(self.notebook, ParticleLibrary())
+        self.tem = TEMTab(self.notebook, TEMLibrary())
         self.generic = GenericTab(self.notebook)
         self.notebook.add(self.ftir, text="FTIR")
         self.notebook.add(self.nano, text="NanoDrop UV–Vis")
         self.notebook.add(self.nmr, text="ssNMR")
         self.notebook.add(self.zeta, text="ZetaSizer library")
+        self.notebook.add(self.tem, text="TEM particle size")
         self.notebook.add(self.generic, text="Custom formats")
         self.notebook.enable_traversal()
         self.notebook.pack(fill="both", expand=True, padx=6, pady=(0, 6))
@@ -2151,9 +2779,10 @@ class LabPlotterApp(tk.Tk):
     def _language_changed(self, old_language: str, new_language: str):
         localize_widget_tree(self, old_language, new_language)
         self.language_var.set("한국어" if new_language == "ko" else "English")
-        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.generic):
+        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.tem, self.generic):
             for plot in getattr(tab, "plot_panes", (tab.plot,)):
                 plot.language_changed(old_language, new_language)
+        self.tem._refresh()
 
     def _set_theme(self):
         style = ttk.Style(self)
@@ -2178,12 +2807,16 @@ class LabPlotterApp(tk.Tk):
         )
 
     def _initial_draw(self):
-        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.generic):
+        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.tem, self.generic):
             tab._refresh()
 
     def smart_import(self):
-        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Lab data"), "*.csv *.txt *.tsv *.xml *.xlsx *.xlsm *.zip"), (tr("All files"), "*.*")))
-        for path in paths:
+        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Lab data"), "*.csv *.txt *.tsv *.xml *.xlsx *.xlsm *.zip *.tif *.tiff"), (tr("All files"), "*.*")))
+        tem_paths = [path for path in paths if Path(path).suffix.casefold() in TIFF_SUFFIXES]
+        if tem_paths:
+            self.tem.add_paths(tem_paths)
+            self.notebook.select(self.tem)
+        for path in (path for path in paths if Path(path).suffix.casefold() not in TIFF_SUFFIXES):
             try:
                 kind = detect_builtin_kind(path)
                 if kind == "FTIR":

@@ -243,6 +243,8 @@ def workbook_signature(path: str | Path) -> dict[str, Any]:
 def detect_builtin_kind(path: str | Path) -> str | None:
     path = Path(path)
     suffix = path.suffix.lower()
+    if suffix in {".tif", ".tiff"}:
+        return "TEM"
     if suffix == ".zip":
         try:
             with zipfile.ZipFile(path) as archive:
