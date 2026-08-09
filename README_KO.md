@@ -1,6 +1,17 @@
-# LabPlotter 0.8.0
+# LabPlotter 0.8.1
 
-FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 로컬에서 불러와 플롯하고 비교·분석하는 Windows 데스크톱 앱입니다. 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
+FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
+
+## 0.8.1 웹 버전
+
+- `web/streamlit_app.py`에서 실행되는 Streamlit UI 추가
+- 데스크톱과 동일한 FTIR, NanoDrop, Bruker ssNMR, ZetaSizer 및 TEM 분석 코어 사용
+- 브라우저에서 여러 파일 업로드, 데이터 선택, 색상·축·선 설정 및 PNG/SVG/CSV 다운로드
+- 영어/한국어 전환과 한글 그래프용 Noto CJK 글꼴 지원
+- 초기 웹 버전은 브라우저 세션 단위로 동작하며 공동 particle/TEM library를 서버에 영구 저장하지 않음
+- 로컬 SQLite library, 편집형 OCR 검수, Windows 클립보드 복사 및 `.labpatch` 업데이트는 데스크톱 전용으로 유지
+
+로컬에서 웹 UI를 미리 보려면 `python -m pip install -r web/requirements.txt`를 한 뒤 `python -m streamlit run web/streamlit_app.py`를 실행합니다. Streamlit Community Cloud에서는 이 GitHub 저장소를 선택하고 main file을 `web/streamlit_app.py`로 지정합니다.
 
 ## 현재 구현된 기능
 
