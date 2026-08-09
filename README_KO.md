@@ -1,4 +1,4 @@
-# LabPlotter 0.7.0
+# LabPlotter 0.7.4
 
 FTIR, NanoDrop UV–Vis, ZetaSizer 데이터를 로컬에서 불러와 Origin 스타일로 플롯하고 비교하는 Windows 데스크톱 앱입니다. 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
@@ -69,6 +69,8 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 - 메인 탭 왼쪽은 현재 그래프에 포함된 particle 이름, 평균 Z-average, 평균 zeta potential만 표시하고 추가/제거에 사용
 - 전체 라이브러리는 별도의 크기 조절 가능한 창에서 source, batch alias, DLS/Zeta replicate 수, OCR 자동/검수/실패 상태와 OCR 필드를 함께 확인
 - DLS, zeta-potential, batch별 Z-average, batch별 평균 zeta potential을 2×2 대시보드로 동시에 표시
+- 네 그래프 모두 전체 곡선/막대에 한 색상을 일괄 적용하거나 particle별 개별 색상을 지정
+- 선택한 particle 색상을 replicate, mean, SD 영역, peak label과 batch bar에 일관되게 적용
 - 여러 particle을 선택해 distribution 그래프에서 다음 방식으로 비교
   - Mean ± SD
   - Mean + replicate curves
@@ -80,6 +82,7 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 - OCR의 Z-Average와 Zeta Potential 평균을 반복 측정별로 모아 batch bar chart의 mean/median, SD/SEM error bar를 계산
 - `241101_JM10A_AMP`는 `JM10A`, `JM38B_Cell_No_6`은 `JM38B`로 자동 축약하고 각 bar graph 설정에서 source와 함께 batch 이름을 직접 편집
 - 확대된 행 높이, 가로/세로 스크롤, 드래그 가능한 패널 구분선
+- 메인 plot-selection 목록과 별도 particle-library 표의 열 너비를 자동 저장하고 재실행·업데이트 후 복원
 - 이름·업데이트 시각·DLS/Zeta 측정 수·검수된 OCR 수·원본별 정렬 및 기본 정렬 복원
 - 선택한 particle과 연결된 모든 측정값을 확인 후 library에서 삭제
 - 각 replicate에 대응하는 embedded measurement-result table을 원본 픽셀, 창 맞춤, 50–300% 확대 및 스크롤로 열람

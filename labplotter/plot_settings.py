@@ -16,6 +16,34 @@ FONT_FAMILIES = (
 )
 
 
+class ScrollableSettingsFrame(ttk.Frame):
+    """A notebook page whose settings remain reachable for long particle lists."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        background = ttk.Style(self).lookup("TFrame", "background") or "#F0F0F0"
+        self.canvas = tk.Canvas(self, highlightthickness=0, background=background)
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.content = ttk.Frame(self.canvas, padding=10)
+        self._window = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
+        self.content.bind("<Configure>", self._content_changed)
+        self.canvas.bind("<Configure>", self._canvas_changed)
+        self.canvas.bind("<Enter>", lambda _event: self.canvas.bind_all("<MouseWheel>", self._wheel))
+        self.canvas.bind("<Leave>", lambda _event: self.canvas.unbind_all("<MouseWheel>"))
+
+    def _content_changed(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _canvas_changed(self, event):
+        self.canvas.itemconfigure(self._window, width=event.width)
+
+    def _wheel(self, event):
+        self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+
 class PlotSettingsWindow(tk.Toplevel):
     """Non-modal, reusable editor for one PlotPane's visual options."""
 
@@ -23,11 +51,14 @@ class PlotSettingsWindow(tk.Toplevel):
         super().__init__(pane)
         self.pane = pane
         self.title(tr("Graph settings"))
+        self.transient(pane.winfo_toplevel())
         self.geometry("760x700")
         self.minsize(650, 560)
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.live = tk.BooleanVar(value=True)
         self._traces: list[tuple[tk.Variable, str]] = []
+        self._extension_job = None
+        self._extension_applying = False
 
         top = ttk.Frame(self, padding=(10, 8))
         top.pack(fill="x")
@@ -46,9 +77,9 @@ class PlotSettingsWindow(tk.Toplevel):
         self._build_fonts(fonts)
         self.extension = getattr(self.pane, "settings_extension", None)
         if self.extension is not None:
-            extra = ttk.Frame(notebook, padding=10)
+            extra = ScrollableSettingsFrame(notebook)
             notebook.add(extra, text=tr(self.extension.title))
-            self.extension.build(extra)
+            self.extension.build(extra.content)
         self._connect_live_preview()
         language_manager.subscribe(self.language_changed)
         localize_widget_tree(self)
@@ -198,12 +229,40 @@ class PlotSettingsWindow(tk.Toplevel):
             self.after_idle(self.pane.refresh)
 
     def _extension_changed(self, *_args):
-        if self.live.get():
-            self.after_idle(self.extension.apply)
+        if not self.live.get() or self._extension_applying:
+            return
+        if self._extension_job is not None:
+            try:
+                self.after_cancel(self._extension_job)
+            except tk.TclError:
+                pass
+        # A dropdown selection or typed color can produce several Tk writes.
+        # Coalesce them so database and four-plot refresh work runs once.
+        self._extension_job = self.after(120, self._apply_extension_preview)
+
+    def _apply_extension_preview(self):
+        self._extension_job = None
+        if not self.winfo_exists() or not self.live.get() or self._extension_applying:
+            return
+        self._extension_applying = True
+        try:
+            self.extension.apply()
+        finally:
+            self._extension_applying = False
 
     def apply(self):
+        if self._extension_job is not None:
+            try:
+                self.after_cancel(self._extension_job)
+            except tk.TclError:
+                pass
+            self._extension_job = None
         if self.extension is not None:
-            self.extension.apply()
+            self._extension_applying = True
+            try:
+                self.extension.apply()
+            finally:
+                self._extension_applying = False
         self.pane.refresh()
 
     def restore_defaults(self):
@@ -261,6 +320,12 @@ class PlotSettingsWindow(tk.Toplevel):
 
     def _close(self):
         self.pane.cancel_annotation()
+        if getattr(self, "_extension_job", None) is not None:
+            try:
+                self.after_cancel(self._extension_job)
+            except tk.TclError:
+                pass
+            self._extension_job = None
         for variable, token in self._traces:
             try:
                 variable.trace_remove("write", token)
