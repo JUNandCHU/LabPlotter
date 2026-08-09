@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 — 2026-08-09
+
+- Added an initial Streamlit web edition that shares LabPlotter's desktop parsing and scientific analysis core.
+- Added browser workflows for FTIR processing, NanoDrop overlays, Bruker ssNMR processing, ZetaSizer distributions and raw-peak summaries, TEM TIFF screening, and custom spreadsheet mappings.
+- Added English/Korean web controls, Origin-style plot settings, per-series colors, and PNG/SVG/CSV downloads.
+- Kept web uploads session-oriented; persistent libraries, editable ZetaSizer OCR review, Windows clipboard export, and `.labpatch` management remain desktop-only.
+- Added a dedicated web dependency file, Streamlit theme, Korean CJK font package, Linux web smoke CI, and shared-core web tests.
+
 ## 0.8.0 — 2026-07-23
 
 - Added a dedicated TEM particle-size tab for one or many TIFF images.
