@@ -221,12 +221,26 @@ class LocalizedNavigationToolbar(NavigationToolbar2Tk):
 
 
 class PlotPane(ttk.Frame):
-    def __init__(self, parent, draw_callback: Callable, options: PlotOptions, compact: bool = False):
+    def __init__(
+        self,
+        parent,
+        draw_callback: Callable,
+        options: PlotOptions,
+        compact: bool = False,
+        draggable_legend: bool = False,
+        legend_position: tuple[float, float] | None = None,
+        legend_position_changed: Callable[[tuple[float, float] | None], None] | None = None,
+    ):
         super().__init__(parent)
         self.draw_callback = draw_callback
         self.options = options
         self.default_options = deepcopy(options)
         self.compact = compact
+        self.draggable_legend = draggable_legend
+        self.legend_position = legend_position
+        self.legend_position_changed = legend_position_changed
+        self._legend_artist = None
+        self._legend_drag_started = False
         self.figure = Figure(figsize=(8.5, 6.2), dpi=100)
         self.axis = self.figure.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.figure, master=self)
@@ -300,6 +314,8 @@ class PlotPane(ttk.Frame):
         }
         self.canvas.mpl_connect("button_press_event", self._annotation_press)
         self.canvas.mpl_connect("button_release_event", self._annotation_release)
+        self.canvas.mpl_connect("button_press_event", self._legend_press)
+        self.canvas.mpl_connect("button_release_event", self._legend_release)
 
     def _rebuild_toolbar(self):
         if self.toolbar is not None:
@@ -342,7 +358,10 @@ class PlotPane(ttk.Frame):
 
     def refresh(self):
         self._read_options()
+        if self._legend_artist is not None:
+            self._legend_artist.set_draggable(False)
         self.axis.clear()
+        self._legend_artist = None
         self.overlay_artists = []
         try:
             self.draw_callback(self.axis, self.options)
@@ -357,8 +376,18 @@ class PlotPane(ttk.Frame):
     def _create_legend(self):
         handles, labels = self.axis.get_legend_handles_labels()
         if not self.options.legend or not handles:
+            if hasattr(self, "_legend_artist"):
+                self._legend_artist = None
             return None
         ink = "#E8E8E8" if self.options.background == "Dark" else "black"
+        saved_position = getattr(self, "legend_position", None)
+        placement = {"loc": "upper right"} if self.compact else {}
+        if saved_position is not None:
+            placement = {
+                "loc": "lower left",
+                "bbox_to_anchor": saved_position,
+                "bbox_transform": self.axis.transAxes,
+            }
         if self.compact:
             maximum = 8
             hidden = max(0, len(handles) - maximum)
@@ -371,7 +400,7 @@ class PlotPane(ttk.Frame):
                 labels,
                 frameon=True,
                 framealpha=0.82,
-                loc="upper right",
+                **placement,
                 ncol=2 if len(labels) > 4 else 1,
                 fontsize=max(7.0, min(float(self.options.legend_font_size), 9.0)),
                 borderaxespad=0.35,
@@ -384,12 +413,55 @@ class PlotPane(ttk.Frame):
             # it may overlay the graph, but it cannot collapse the data axes.
             legend.set_in_layout(False)
         else:
-            legend = self.axis.legend(frameon=False, fontsize=self.options.legend_font_size)
+            legend = self.axis.legend(frameon=False, fontsize=self.options.legend_font_size, **placement)
         for text in legend.get_texts():
             text.set_color(self.options.legend_color or ink)
             text.set_fontfamily(font_family_for_text(self.options.legend_font_family or "Arial", text.get_text()))
             text.set_fontweight("bold" if self.options.legend_bold else "normal")
+        if getattr(self, "draggable_legend", False):
+            legend.set_draggable(True, use_blit=False, update="loc")
+        if hasattr(self, "_legend_artist"):
+            self._legend_artist = legend
         return legend
+
+    def _legend_press(self, event):
+        """Remember presses inside a draggable legend without stealing graph tools."""
+        self._legend_drag_started = False
+        legend = self._legend_artist
+        if not self.draggable_legend or legend is None or event.button != 1:
+            return
+        try:
+            self._legend_drag_started = bool(legend.contains(event)[0])
+        except (AttributeError, RuntimeError):
+            self._legend_drag_started = False
+
+    def _legend_release(self, _event):
+        if not self._legend_drag_started:
+            return
+        self._legend_drag_started = False
+        # Matplotlib finalizes DraggableLegend on the same release event.  Run
+        # after Tk returns to its event loop so we store the finalized position.
+        try:
+            self.after_idle(self._capture_legend_position)
+        except tk.TclError:
+            pass
+
+    def _capture_legend_position(self):
+        legend = self._legend_artist
+        if not self.draggable_legend or legend is None:
+            return
+        try:
+            self.canvas.draw()
+            bounds = legend.get_window_extent(renderer=self.canvas.get_renderer())
+            x, y = self.axis.transAxes.inverted().transform((bounds.x0, bounds.y0))
+        except (AttributeError, RuntimeError, ValueError):
+            return
+        position = (round(float(x), 6), round(float(y), 6))
+        if not all(math.isfinite(value) for value in position):
+            return
+        self.legend_position = position
+        if self.legend_position_changed is not None:
+            self.legend_position_changed(position)
 
     def register_overlay(self, artist):
         """Register an automatic label that follows annotation export visibility."""
@@ -436,6 +508,10 @@ class PlotPane(ttk.Frame):
         }
         for key, value in values.items():
             self.vars[key].set(value)
+        if self.draggable_legend:
+            self.legend_position = None
+            if self.legend_position_changed is not None:
+                self.legend_position_changed(None)
 
     def begin_annotation(self, kind: str, line_style: str, color: str, line_width: float, callback: Callable | None = None):
         self._pending_annotation = (kind, line_style, color, line_width, callback)
@@ -2103,6 +2179,7 @@ class ZetaTab(ttk.Frame):
         self.library = library
         self.settings_store = SettingsStore()
         self.color_settings = self._load_color_settings()
+        self.legend_positions = self._load_legend_positions()
         self.active_particles: list[str] = []
         self.library_window = None
         self.mode = tk.StringVar(value="Mean ± SD")
@@ -2153,8 +2230,24 @@ class ZetaTab(ttk.Frame):
         frames = [ttk.LabelFrame(upper, text=tr("DLS distribution"), padding=3), ttk.LabelFrame(upper, text=tr("Zeta distribution"), padding=3),
                   ttk.LabelFrame(lower, text=tr("Batch vs DLS Z-average"), padding=3), ttk.LabelFrame(lower, text=tr("Batch vs average zeta potential"), padding=3)]
         upper.add(frames[0], weight=1); upper.add(frames[1], weight=1); lower.add(frames[2], weight=1); lower.add(frames[3], weight=1)
-        self.dls_plot = PlotPane(frames[0], lambda axis, options: self._draw_kind("DLS", axis, options), PlotOptions("Particle diameter", "nm", "Intensity", "%", line_width=2.2), compact=True)
-        self.zeta_plot = PlotPane(frames[1], lambda axis, options: self._draw_kind("Zeta", axis, options), PlotOptions("Zeta potential", "mV", "Total counts", "kcps", line_width=2.2), compact=True)
+        self.dls_plot = PlotPane(
+            frames[0],
+            lambda axis, options: self._draw_kind("DLS", axis, options),
+            PlotOptions("Particle diameter", "nm", "Intensity", "%", line_width=2.2),
+            compact=True,
+            draggable_legend=True,
+            legend_position=self.legend_positions.get("dls_curve"),
+            legend_position_changed=lambda position: self.save_legend_position("dls_curve", position),
+        )
+        self.zeta_plot = PlotPane(
+            frames[1],
+            lambda axis, options: self._draw_kind("Zeta", axis, options),
+            PlotOptions("Zeta potential", "mV", "Total counts", "kcps", line_width=2.2),
+            compact=True,
+            draggable_legend=True,
+            legend_position=self.legend_positions.get("zeta_curve"),
+            legend_position_changed=lambda position: self.save_legend_position("zeta_curve", position),
+        )
         self.dls_bar_plot = PlotPane(frames[2], lambda axis, options: self._draw_batch("DLS", axis, options), PlotOptions("Batch", "", "Z-average", "nm", line_width=1.5, legend=False), compact=True)
         self.zeta_bar_plot = PlotPane(frames[3], lambda axis, options: self._draw_batch("Zeta", axis, options), PlotOptions("Batch", "", "Average zeta potential", "mV", line_width=1.5, legend=False), compact=True)
         self.dls_curve_settings = SeriesColorSettingsExtension(self, "dls_curve", "curves")
@@ -2189,6 +2282,35 @@ class ZetaTab(ttk.Frame):
                 },
             }
         return result
+
+    def _load_legend_positions(self):
+        saved = self.settings_store.get("zetasizer_legend_positions", {})
+        saved = saved if isinstance(saved, dict) else {}
+        positions = {}
+        for key in ("dls_curve", "zeta_curve"):
+            value = saved.get(key)
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                continue
+            try:
+                position = tuple(float(item) for item in value)
+            except (TypeError, ValueError):
+                continue
+            if all(math.isfinite(item) and -5.0 <= item <= 5.0 for item in position):
+                positions[key] = position
+        return positions
+
+    def save_legend_position(self, plot_key: str, position: tuple[float, float] | None):
+        if position is None:
+            self.legend_positions.pop(plot_key, None)
+        else:
+            self.legend_positions[plot_key] = tuple(float(value) for value in position)
+        try:
+            self.settings_store.set(
+                "zetasizer_legend_positions",
+                {key: list(value) for key, value in self.legend_positions.items()},
+            )
+        except OSError:
+            pass
 
     def save_color_settings(self):
         try:

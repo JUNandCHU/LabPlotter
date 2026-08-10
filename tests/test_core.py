@@ -304,6 +304,40 @@ class ZetaDashboardTests(unittest.TestCase):
         figure.tight_layout()
         self.assertGreater(axis.get_position().height, 0.6)
 
+    def test_compact_legend_can_restore_a_draggable_axes_position(self):
+        figure = Figure(figsize=(6, 4))
+        axis = figure.add_subplot(111)
+        axis.plot([0, 1], [0, 1], label="JM66_PDA")
+        pane = SimpleNamespace(
+            axis=axis,
+            compact=True,
+            options=PlotOptions("X", "", "Y", "", legend=True),
+            draggable_legend=True,
+            legend_position=(0.18, 0.22),
+            _legend_artist=None,
+        )
+        legend = PlotPane._create_legend(pane)
+        anchor = legend.get_bbox_to_anchor()
+        axes_position = axis.transAxes.inverted().transform((anchor.x0, anchor.y0))
+        self.assertTrue(legend.get_draggable())
+        np.testing.assert_allclose(axes_position, (0.18, 0.22))
+
+    def test_zetasizer_legend_positions_are_external_and_independent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SettingsStore(Path(temporary) / "settings.json")
+            dashboard = SimpleNamespace(settings_store=store, legend_positions={})
+            ZetaTab.save_legend_position(dashboard, "dls_curve", (0.1, 0.2))
+            ZetaTab.save_legend_position(dashboard, "zeta_curve", (0.55, 0.6))
+            self.assertEqual(
+                store.get("zetasizer_legend_positions"),
+                {"dls_curve": [0.1, 0.2], "zeta_curve": [0.55, 0.6]},
+            )
+            loaded = ZetaTab._load_legend_positions(dashboard)
+            self.assertEqual(loaded["dls_curve"], (0.1, 0.2))
+            self.assertEqual(loaded["zeta_curve"], (0.55, 0.6))
+            ZetaTab.save_legend_position(dashboard, "dls_curve", None)
+            self.assertNotIn("dls_curve", store.get("zetasizer_legend_positions"))
+
     def test_distribution_color_extension_exposes_settings_builder(self):
         self.assertTrue(callable(getattr(SeriesColorSettingsExtension, "build", None)))
 

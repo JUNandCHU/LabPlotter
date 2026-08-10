@@ -1,4 +1,4 @@
-# LabPlotter 0.8.1
+# LabPlotter 0.8.2
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 

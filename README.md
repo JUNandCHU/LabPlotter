@@ -11,7 +11,7 @@ LabPlotter is a Windows and browser-based scientific workbench for FTIR, NanoDro
 - Desktop measurement data remains on the local computer
 - Session-oriented Streamlit web interface using the same scientific core
 
-The current development release is **0.8.1**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
+The current development release is **0.8.2**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
 
 ## Run from source
 
