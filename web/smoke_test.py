@@ -13,7 +13,7 @@ def main() -> None:
     if app.exception:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     titles = [item.value for item in app.title]
-    if titles != ["LabPlotter Web 0.8.5"]:
+    if titles != ["LabPlotter Web 0.8.6"]:
         raise RuntimeError(f"Unexpected title: {titles}")
     labels = [item.label for item in app.tabs]
     expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "TEM", "Custom format"]
@@ -37,11 +37,28 @@ def main() -> None:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     if len(app.metric) != 12 or app.session_state["_nmr_result"].names != ("A", "B"):
         raise RuntimeError("ssNMR comparison controls did not produce metrics")
-    before = app.session_state['_nmr_region_metrics']['Aliphatic region']['R2']
+    before = app.session_state['_nmr_region_metrics']['Aliphatic region']['n']
     app.number_input(key='nmr-int-a-high').set_value(30.0).run()
     regional = app.session_state['_nmr_region_metrics']['Aliphatic region']
-    if regional['requested_range_ppm'] != [0,30] or regional['R2'] == before:
+    if regional['requested_range_ppm'] != [0,30] or regional['n'] >= before:
         raise RuntimeError('Regional metric bounds did not update')
+    ratios=[row['ratio'] for row in app.session_state['_nmr_integral_ratios']]
+    for button,bounds in (('nmr-view-aliphatic',(0,30)),('nmr-view-aromatic',(90,160)),('nmr-view-custom',(0,200))):
+        app.button(key=button).click().run()
+        result=app.session_state['_nmr_result']
+        if app.exception or (result.settings.ppm_min,result.settings.ppm_max)!=bounds:
+            raise RuntimeError('Region button did not reprocess the requested range')
+        if not np.isclose(np.nanmax(np.abs(result.a)),1):
+            raise RuntimeError('Selected region was not independently normalized')
+        np.testing.assert_allclose([row['ratio'] for row in app.session_state['_nmr_integral_ratios']],ratios)
+    app.number_input(key='nmr-custom-low').set_value(10.0)
+    app.number_input(key='nmr-custom-high').set_value(180.0).run()
+    app.button(key='nmr-view-custom').click().run()
+    app.button(key='nmr-edit-preprocessing').click().run()
+    values={item.label:item.value for item in app.number_input}
+    if values.get('Common ppm minimum')!=10 or values.get('Common ppm maximum')!=180:
+        raise RuntimeError('Preprocessing dialog did not show the selected custom range')
+    next(button for button in app.button if button.label=='Process and compare').click().run()
     app.button(key='nmr-comparison-square').click().run()
     if app.exception or not app.session_state['nmr-comparison-fixed-ratio']:
         raise RuntimeError('Square graph control failed')

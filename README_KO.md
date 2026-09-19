@@ -1,4 +1,4 @@
-# LabPlotter 0.8.5
+# LabPlotter 0.8.6
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
@@ -60,7 +60,7 @@ FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고
 
 NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorbance입니다. Absorbance는 엄밀히 무차원이므로 기본 Y축 단위는 비워 두었습니다. 필요하면 그래프 설정에서 `a.u.`를 입력할 수 있습니다.
 
-### Solid-state NMR (0.8.5)
+### Solid-state NMR (0.8.6)
 
 `Import ASCII TXT…`로 TopSpin의 **4열 ASCII**를 가져옵니다. **4열 ppm / 2열 intensity**를 사용하며 첫 줄의 1열에 제목이 있어도 측정점은 보존합니다. 이름은 파일명에서 확장자를 제외한 값이고 언제든 변경할 수 있습니다. ZIP/FID 가져오기는 제거했습니다.
 
@@ -70,7 +70,7 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 4. `Compare two spectra…` → 기준 A와 비교 B 선택 → 전처리 설정 → `Process and compare`를 누르면 별도 비교 창이 열립니다.
 5. 비교 창의 ppm 범위와 적분 구간을 바꾸면 결과가 자동으로 갱신됩니다. `Calculate / update range`로 즉시 적용할 수도 있습니다. 전체 비교 구간·Aliphatic·Aromatic 각각의 R², r², r, N과 두 스펙트럼의 적분비가 **그래프 아래**에 표시됩니다. 두 검증 버튼은 세 구간의 계산 과정과 전처리 내역을 별도 창으로 엽니다.
 
-`Aliphatic region` / `Aromatic region` 버튼은 현재 입력된 해당 구간으로 그래프와 전체 비교 범위를 즉시 전환하고 R²·r²를 갱신합니다. 구간을 수정하면 버튼도 수정한 값을 사용합니다. 전처리와 정규화는 다시 수행하지 않습니다.
+`Aliphatic region` / `Aromatic region` / `Custom region` 버튼은 현재 입력된 해당 구간을 공통 ppm 최솟값·최댓값으로 지정하고, **원본 스펙트럼에서 전처리를 다시 실행**합니다. 자동 정렬과 정규화는 선택한 구간을 기준으로 다시 계산하고 그래프와 R²·r²를 갱신합니다. Custom의 기본값은 0–200 ppm이며 `Custom min/max`에서 수정합니다. 전처리 범위는 그래프 위에 표시되고 `Preprocessing settings…`에도 반영됩니다. 정렬 구간은 선택한 범위 전체를 사용하며, 격자 간격·baseline 사용 여부·Gaussian 폭·정규화 방식 등 나머지 옵션은 유지합니다. 반복 전환은 항상 원본에서 계산하므로 정규화나 smoothing이 누적되지 않습니다.
 
 전처리 기본값:
 
@@ -83,7 +83,8 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 
 계산 정의:
 
-- 세 통계 구간은 동일하게 전처리한 곡선을 사용하며 구간별로 다시 정규화하지 않습니다. Aliphatic/Aromatic 통계는 각각의 적분 경계값과 연동하고, 전체 비교 구간과 독립적으로 계산합니다. 실제 사용된 격자점과 ppm 범위는 검증 내역에 기록됩니다.
+- 전체 비교 구간 통계는 현재 표시된 전처리 결과를 사용합니다. Aliphatic/Aromatic 통계는 각각의 구간에서 원본을 별도로 전처리·정규화한 결과를 사용하며, 경계값 수정 시 갱신됩니다. 구간별 전처리 범위·이동량·정규화 계수·각 단계의 측정점은 검증 내역에 기록됩니다.
+- Aliphatic/aromatic **적분비**는 두 구간을 함께 포함한 공통 전처리 결과에서 계산합니다. 한 스펙트럼의 분자·분모에는 같은 이동량과 정규화 배율을 적용하여 구간별 정규화로 상대 신호량이 지워지지 않게 합니다. 표시 구간 버튼을 전환해도 이 적분 기준은 유지되며, 수동 전처리 설정 변경 시에는 새 설정을 반영합니다. 적분 검증 창의 전처리 탭에서 공통 처리 범위를 확인할 수 있습니다.
 
 - **R² (직접 일치도)** = `1 − Σ(A−B)² / Σ(A−mean(A))²`. A가 기준이며 회귀로 B의 크기나 오프셋을 다시 맞추지 않습니다. 음수가 될 수 있습니다.
 - **r²** = Pearson r의 제곱. r도 같이 표시하므로 양/음의 상관을 구별할 수 있습니다. 상수 스펙트럼은 정의되지 않는 값을 `Undefined`로 표시합니다.

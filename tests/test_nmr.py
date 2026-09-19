@@ -11,6 +11,7 @@ from labplotter.nmr import (ComparisonSettings, ComparisonResult, parse_topspin_
     preprocess_pair, comparison_metrics, integral_ratios, region_integral, metrics_audit, integrals_audit, preprocessing_audit,
     comparison_region_metrics, regional_metrics_audit)
 from labplotter.nmr_library import NMRLibrary, export_portable_library, import_portable_library
+from labplotter.nmr_comparison import ComparisonSession
 from labplotter.parsers import detect_builtin_kind
 from labplotter.web import parse_uploaded_payload
 
@@ -122,6 +123,72 @@ class ComparisonTests(unittest.TestCase):
         for s in (self.options(grid_step=1e-10), self.options(ppm_min=2,ppm_max=1), self.options(grid_step=float('nan'))):
             with self.assertRaises(ValueError):preprocess_pair(a,a,s)
         with self.assertRaises(ValueError):comparison_metrics(preprocess_pair(a,a,self.options()),2,2)
+
+
+class RegionReprocessingTests(unittest.TestCase):
+    def pair(self):
+        x=np.arange(-10.,210.25,.25)
+        aliphatic=np.maximum(1-np.abs(x-25)/20,0)
+        aromatic=10*np.maximum(1-np.abs(x-130)/25,0)
+        a=Spectrum('A',x,aliphatic+aromatic)
+        b=Spectrum('B',x,3*aliphatic+aromatic)
+        settings=ComparisonSettings(ppm_min=0,ppm_max=200,grid_step=.25,
+                                    baseline=False,align=False,gaussian_fwhm_ppm=0)
+        return a,b,preprocess_pair(a,b,settings)
+
+    def test_regional_normalization_recovers_shape_and_shared_ratio_preserves_amount(self):
+        a,b,full=self.pair();original=b.y.copy()
+        session=ComparisonSession(a,b,full)
+        self.assertLess(comparison_metrics(full,0,50)['R2'],0)
+        region=session.select_region(0,50)
+        np.testing.assert_allclose(region.a,region.b,atol=1e-14)
+        self.assertAlmostEqual(comparison_metrics(region,0,50)['R2'],1)
+        self.assertEqual(region.log['normalization']['divisors_A_B'],[1,3])
+        self.assertEqual(region.log['normalization']['window_ppm'],[0,50])
+        metrics,sources=session.statistics((0,50),(0,50),(90,160))
+        self.assertEqual(metrics['Comparison range']['R2'],metrics['Aliphatic region']['R2'])
+        self.assertAlmostEqual(metrics['Aromatic region']['R2'],1)
+        integral_result,ratios=session.integrals((0,50),(90,160))
+        self.assertEqual((integral_result.settings.ppm_min,integral_result.settings.ppm_max),(0,200))
+        self.assertAlmostEqual(ratios[0]['ratio'],.08)
+        self.assertAlmostEqual(ratios[1]['ratio'],.24)
+        audit=regional_metrics_audit(region,metrics,sources)
+        self.assertIn('independent preprocessing',audit)
+        self.assertIn('divisors_A_B',audit)
+        session.select_region(90,160)
+        restored=session.select_region(0,200)
+        np.testing.assert_array_equal(restored.a,full.a)
+        np.testing.assert_array_equal(restored.b,full.b)
+        self.assertEqual([r['ratio'] for r in session.integrals((0,50),(90,160))[1]],[r['ratio'] for r in ratios])
+        np.testing.assert_array_equal(b.y,original)
+
+    def test_alignment_is_reestimated_inside_each_region(self):
+        x=np.linspace(-10,210,4401)
+        peak=lambda t,c:np.exp(-((t-c)/3)**2)
+        a=Spectrum('A',x,peak(x,25)+peak(x,130))
+        b=Spectrum('B',x,peak(x,25.4)+peak(x,129.3))
+        settings=ComparisonSettings(baseline=False,gaussian_fwhm_ppm=0,alignment_min=90,alignment_max=160)
+        session=ComparisonSession(a,b,preprocess_pair(a,b,settings))
+        aliphatic=session.select_region(0,50)
+        aromatic=session.select_region(90,160)
+        self.assertAlmostEqual(aliphatic.log['alignment']['B_shift_added_ppm'],-.4,places=3)
+        self.assertAlmostEqual(aromatic.log['alignment']['B_shift_added_ppm'],.7,places=3)
+        self.assertEqual(aliphatic.log['alignment']['window_ppm'],[0,50])
+        self.assertEqual(aromatic.log['alignment']['window_ppm'],[90,160])
+
+    def test_invalid_regions_are_atomic_and_original_sources_are_retained(self):
+        a,b,full=self.pair();session=ComparisonSession(a,b,full)
+        for bounds in ((50,0),(0,float('nan')),(1000,1100),('bad',10),(1,1.1)):
+            with self.assertRaises((ValueError,TypeError)):
+                session.select_region(*bounds)
+            self.assertIs(session.result,full)
+        b.y[:]=0
+        region=session.select_region(0,50)
+        self.assertAlmostEqual(comparison_metrics(region,0,50)['R2'],1)
+        # An initially cropped comparison still has enough raw data for both integrals.
+        session.reset(region)
+        _,ratios=session.integrals((0,50),(90,160))
+        self.assertAlmostEqual(ratios[1]['ratio'],.24)
 
 
 class NMRLibraryTests(unittest.TestCase):

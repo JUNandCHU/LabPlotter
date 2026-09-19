@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.6 — 2026-09-19
+
+- Changed Aliphatic/Aromatic shortcuts to rerun preprocessing from preserved raw spectra, using the selected ppm range for alignment, grid, smoothing and normalization. Added an editable Custom region shortcut, defaulting to 0–200 ppm.
+- Displayed the applied processing range and synchronized preprocessing settings on desktop and web. Repeated switches never process an already normalized or smoothed view.
+- Regional R²/r² now use each region's own processing result. Preserved a shared preprocessing basis for aliphatic/aromatic integral ratios so independent regional normalization cannot erase relative signal amounts. Audit views record the correct processing source for every calculation.
+
 ## 0.8.5 — 2026-09-19
 
 - Added Aliphatic region / Aromatic region buttons to desktop and web spectrum comparison. Each click uses the current region bounds and immediately updates the plot and overall comparison statistics without rerunning preprocessing.

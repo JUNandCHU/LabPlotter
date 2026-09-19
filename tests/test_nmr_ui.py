@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import tkinter as tk
-from tkinter import font as tkfont
+from tkinter import font as tkfont, ttk
 from unittest.mock import patch
 from io import BytesIO
 from PIL import Image
@@ -68,11 +68,41 @@ class NMRDesktopWorkflowTests(unittest.TestCase):
         window.fields['low'].set('0');self.assertIsNone(window.metrics)
         window.fields['high'].set('200');window.calculate()
         self.assertEqual(window.metrics['requested_range_ppm'],[0,200])
-        before=window.region_metrics['Aliphatic region']['R2']
+        before=window.region_metrics['Aliphatic region']['n']
         window.fields['ahigh'].set('30')
         self.root.after(500,self.root.quit);self.root.mainloop();self.root.update()
         self.assertEqual(window.region_metrics['Aliphatic region']['requested_range_ppm'],[0,30])
-        self.assertNotEqual(window.region_metrics['Aliphatic region']['R2'],before)
+        self.assertLess(window.region_metrics['Aliphatic region']['n'],before)
+        self.assertFalse(self.errors)
+
+    def test_region_buttons_reprocess_and_custom_bounds_reach_settings_dialog(self):
+        from labplotter.nmr import preprocess_pair
+        window=ComparisonWindow(self.root,self.a,self.b,preprocess_pair(self.a,self.b));self.root.update()
+        todo=[window];buttons={}
+        while todo:
+            widget=todo.pop();todo.extend(widget.winfo_children())
+            if isinstance(widget,ttk.Button):buttons[widget.cget('text')]=widget
+        ratios=[row['ratio'] for row in window.ratios]
+        for label,bounds in (('Aliphatic region',(0,50)),('Aromatic region',(90,160)),('Custom region',(0,200))):
+            buttons[label].invoke();self.root.update()
+            self.assertEqual((window.result.settings.ppm_min,window.result.settings.ppm_max),bounds)
+            self.assertEqual(window.plot.axis.get_xlim(),tuple(reversed(bounds)))
+            self.assertEqual(window.metrics['requested_range_ppm'],list(bounds))
+            self.assertAlmostEqual(np.nanmax(np.abs(window.result.a)),1)
+            np.testing.assert_allclose([row['ratio'] for row in window.ratios],ratios)
+        window.fields['clow'].set('10');window.fields['chigh'].set('180')
+        buttons['Custom region'].invoke();self.root.update()
+        self.assertEqual(window.plot.axis.get_xlim(),(180,10))
+        window.reprocess();self.root.update()
+        dialog=next(w for w in window.winfo_children() if isinstance(w,PreprocessingDialog))
+        self.assertEqual(float(dialog.vars['ppm_min'].get()),10)
+        self.assertEqual(float(dialog.vars['ppm_max'].get()),180)
+        dialog.destroy()
+        before=window.result;window.fields['chigh'].set('0')
+        with patch('labplotter.nmr_ui.messagebox.showerror') as error:
+            buttons['Custom region'].invoke();self.assertTrue(error.called)
+        self.assertIs(window.result,before)
+        self.assertEqual(window.plot.axis.get_xlim(),(180,10))
         self.assertFalse(self.errors)
 
     def test_large_font_rows_and_square_clipboard_then_default_restore(self):
