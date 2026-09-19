@@ -29,7 +29,7 @@ from .clipboard import copy_png_to_clipboard
 from .config import SettingsStore
 from .i18n import canonical, language, localize_widget_tree, manager as language_manager, set_language, tr, translate_value
 from .models import Spectrum
-from .nmr import parse_bruker_zip, process_bruker_1d
+from .nmr_ui import SSNMRTab
 from .ocr import OCRTable, run_table_ocr
 from .parsers import (
     detect_builtin_kind,
@@ -41,7 +41,8 @@ from .parsers import (
     workbook_signature,
 )
 from .plot_settings import AnnotationWindow, PlotSettingsWindow
-from .plotting import AnnotationSpec, PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text
+from .plotting import (AnnotationSpec, PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text,
+                       SERIES_PALETTE, save_plot_figure, validate_figure_ratio)
 from .processing import ftir_peak_indices, mean_curve, process_ftir
 from .storage import FormatProfileStore, ParticleLibrary, default_particle_label
 from .tem import (
@@ -85,16 +86,11 @@ BASELINE_HELP = {
 }
 
 
-SERIES_PALETTE = (
-    "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
-    "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
-)
-
 ZETA_COLOR_DEFAULTS = {
-    "dls_curve": {"scope": "individual", "global_color": "#1F77B4", "colors": {}},
-    "zeta_curve": {"scope": "individual", "global_color": "#1F77B4", "colors": {}},
-    "dls_bar": {"scope": "all", "global_color": "#4C78A8", "colors": {}},
-    "zeta_bar": {"scope": "all", "global_color": "#F58518", "colors": {}},
+    "dls_curve": {"scope": "individual", "global_color": SERIES_PALETTE[0], "colors": {}},
+    "zeta_curve": {"scope": "individual", "global_color": SERIES_PALETTE[0], "colors": {}},
+    "dls_bar": {"scope": "individual", "global_color": SERIES_PALETTE[0], "colors": {}},
+    "zeta_bar": {"scope": "individual", "global_color": SERIES_PALETTE[0], "colors": {}},
 }
 
 
@@ -243,7 +239,8 @@ class PlotPane(ttk.Frame):
         self._legend_drag_started = False
         self.figure = Figure(figsize=(8.5, 6.2), dpi=100)
         self.axis = self.figure.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self)
+        self.canvas_host = ttk.Frame(self)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.canvas_host)
         self.action_frame = ttk.Frame(self)
         actions = (
             ("Graph settings…", self.open_settings),
@@ -275,7 +272,12 @@ class PlotPane(ttk.Frame):
         self._pending_annotation = None
         self._drawing_start = None
         self._rebuild_toolbar()
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.canvas_host.pack(fill="both", expand=True)
+        self.canvas.get_tk_widget().place(x=0, y=0, relwidth=1, relheight=1)
+        self._layout_job = None
+        self.canvas_host.bind("<Configure>", self._resize_canvas)
+        self.canvas.get_tk_widget().bind("<Configure>", self._schedule_layout, add=True)
+        self.bind("<Destroy>", self._cancel_layout, add=True)
 
         self.vars = {
             "x_label": tk.StringVar(value=tr(options.x_label)),
@@ -305,6 +307,9 @@ class PlotPane(ttk.Frame):
             "reverse_x": tk.BooleanVar(value=options.reverse_x),
             "legend": tk.BooleanVar(value=options.legend),
             "background": tk.StringVar(value=options.background),
+            "fixed_ratio": tk.BooleanVar(value=options.figure_ratio is not None),
+            "ratio_width": tk.StringVar(value=str((options.figure_ratio or (8.5, 6.2))[0])),
+            "ratio_height": tk.StringVar(value=str((options.figure_ratio or (8.5, 6.2))[1])),
             "x_min": tk.StringVar(value="" if options.x_min is None else str(options.x_min)),
             "x_max": tk.StringVar(value="" if options.x_max is None else str(options.x_max)),
             "y_min": tk.StringVar(value="" if options.y_min is None else str(options.y_min)),
@@ -316,6 +321,50 @@ class PlotPane(ttk.Frame):
         self.canvas.mpl_connect("button_release_event", self._annotation_release)
         self.canvas.mpl_connect("button_press_event", self._legend_press)
         self.canvas.mpl_connect("button_release_event", self._legend_release)
+
+    def _resize_canvas(self, _event=None):
+        width, height = self.canvas_host.winfo_width(), self.canvas_host.winfo_height()
+        if width < 2 or height < 2:
+            return
+        ratio = self.options.figure_ratio
+        if ratio is not None:
+            scale = min(width / ratio[0], height / ratio[1])
+            w, h = max(1, round(ratio[0] * scale)), max(1, round(ratio[1] * scale))
+        else:
+            w, h = width, height
+        self.canvas.get_tk_widget().place(relwidth=0, relheight=0, x=(width-w)//2, y=(height-h)//2, width=w, height=h)
+        self._schedule_layout()
+
+    def _schedule_layout(self, _event=None):
+        if self._layout_job is not None:
+            self.after_cancel(self._layout_job)
+        self._layout_job = self.after(80, self._fit_figure)
+
+    def _fit_figure(self):
+        self._layout_job = None
+        widget = self.canvas.get_tk_widget()
+        # Tk's DPI change can otherwise leave the renderer larger than its image.
+        self.figure.set_size_inches(widget.winfo_width()/self.figure.dpi,
+                                    widget.winfo_height()/self.figure.dpi, forward=False)
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
+
+    def _cancel_layout(self, event):
+        if event.widget is self and self._layout_job is not None:
+            self.after_cancel(self._layout_job)
+            self._layout_job = None
+
+    def set_figure_ratio(self, ratio=None):
+        if ratio is not None:
+            width, height = validate_figure_ratio(*ratio)
+            self.vars['ratio_width'].set(f'{width:g}')
+            self.vars['ratio_height'].set(f'{height:g}')
+        else:
+            width, height = self.default_options.figure_ratio or (8.5, 6.2)
+            self.vars['ratio_width'].set(f'{width:g}')
+            self.vars['ratio_height'].set(f'{height:g}')
+        self.vars['fixed_ratio'].set(ratio is not None)
+        self.refresh()
 
     def _rebuild_toolbar(self):
         if self.toolbar is not None:
@@ -341,6 +390,13 @@ class PlotPane(ttk.Frame):
             "tick_color", "x_color", "y_color", "legend_color",
         ):
             setattr(self.options, key, self.vars[key].get())
+        if not self.vars["fixed_ratio"].get():
+            self.options.figure_ratio = None
+        else:
+            try:
+                self.options.figure_ratio = validate_figure_ratio(self.vars['ratio_width'].get(), self.vars['ratio_height'].get())
+            except ValueError:
+                pass  # Keep the last valid preview while a field is being typed.
         self.options.background = canonical(self.vars["background"].get())
         self.options.line_width = _float_or_none(self.vars["line_width"].get()) or 2.0
         self.options.tick_width = _float_or_none(self.vars["tick_width"].get()) or 1.5
@@ -361,6 +417,7 @@ class PlotPane(ttk.Frame):
         if self._legend_artist is not None:
             self._legend_artist.set_draggable(False)
         self.axis.clear()
+        self.axis.set_prop_cycle(color=SERIES_PALETTE)
         self._legend_artist = None
         self.overlay_artists = []
         try:
@@ -369,6 +426,7 @@ class PlotPane(ttk.Frame):
             self._create_legend()
             self.figure.tight_layout()
             self._render_annotations()
+            self._resize_canvas()
             self.canvas.draw_idle()
         except Exception as exc:
             messagebox.showerror(tr("Plot error"), str(exc), parent=self)
@@ -499,6 +557,9 @@ class PlotPane(ttk.Frame):
             "tick_length": str(self.options.tick_length), "spine_width": str(self.options.spine_width),
             "reverse_x": self.options.reverse_x, "legend": self.options.legend,
             "background": tr(self.options.background),
+            "fixed_ratio": self.options.figure_ratio is not None,
+            "ratio_width": str((self.options.figure_ratio or (8.5, 6.2))[0]),
+            "ratio_height": str((self.options.figure_ratio or (8.5, 6.2))[1]),
             "x_min": "" if self.options.x_min is None else str(self.options.x_min),
             "x_max": "" if self.options.x_max is None else str(self.options.x_max),
             "y_min": "" if self.options.y_min is None else str(self.options.y_min),
@@ -596,7 +657,7 @@ class PlotPane(ttk.Frame):
         path = filedialog.asksaveasfilename(parent=self, defaultextension=".png", filetypes=((tr("PNG image"), "*.png"), (tr("SVG vector"), "*.svg"), (tr("PDF vector"), "*.pdf")))
         if path:
             try:
-                self._with_annotation_visibility(include_annotations, lambda: self.figure.savefig(path, dpi=300, bbox_inches="tight"))
+                self._with_annotation_visibility(include_annotations, lambda: save_plot_figure(self.figure, path, dpi=300))
             except Exception as exc:
                 messagebox.showerror(tr("Save error"), str(exc), parent=self)
 
@@ -873,163 +934,6 @@ class NanoDropTab(ttk.Frame):
             axis.plot(spectrum.x, spectrum.y, label=spectrum.name, linewidth=options.line_width, **kwargs)
         if not self.tree.visible():
             axis.text(0.5, 0.5, tr("Add a NanoDrop XML/XLSX export"), ha="center", va="center", transform=axis.transAxes)
-
-    def _refresh(self):
-        if hasattr(self, "plot"):
-            self.plot.refresh()
-
-
-class SSNMRTab(ttk.Frame):
-    PHASE_MODES = (
-        "Automatic phase",
-        "Saved TopSpin phase",
-        "Magnitude (phase independent)",
-        "No phase correction",
-    )
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        paned = ttk.Panedwindow(self, orient="horizontal")
-        paned.pack(fill="both", expand=True)
-        controls, graph = ttk.Frame(paned, padding=7), ttk.Frame(paned, padding=5)
-        controls.configure(width=570)
-        paned.add(controls, weight=0); paned.add(graph, weight=1)
-        row = ttk.Frame(controls)
-        ttk.Button(row, text="Add Bruker ZIP…", command=self.add_dialog).pack(side="left")
-        ttk.Button(row, text="Remove", command=lambda: self.tree.remove_selected()).pack(side="left", padx=4)
-        ttk.Button(row, text="Color…", command=lambda: self.tree.color_selected()).pack(side="left")
-        row.pack(fill="x", pady=(0, 5))
-        self.tree = SpectrumTree(controls, self._refresh)
-        self.tree.pack(fill="both", expand=True)
-        ttk.Label(
-            controls,
-            text="All supported 1D FIDs are listed. When 13C data are present, carbon spectra are shown by default and other nuclei remain hidden.",
-            foreground="#555555",
-            wraplength=520,
-        ).pack(anchor="w", pady=(5, 0))
-
-        process = ttk.LabelFrame(controls, text="ssNMR processing", padding=6)
-        process.pack(fill="x", pady=7)
-        self.saved_window = tk.BooleanVar(value=True)
-        self.phase_mode = tk.StringVar(value="Automatic phase")
-        self.extra_lb = tk.StringVar(value="0")
-        self.phase0 = tk.StringVar(value="0")
-        self.phase1 = tk.StringVar(value="0")
-        self.baseline = tk.BooleanVar(value=False)
-        self.normalization = tk.BooleanVar(value=True)
-        self.vertical_offset = tk.StringVar(value="0")
-        self.peaks = tk.BooleanVar(value=False)
-        self.prominence = tk.StringVar(value="0.05")
-        ttk.Checkbutton(process, text="Use saved TopSpin window function", variable=self.saved_window, command=self._refresh).grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(process, text="Phase mode").grid(row=1, column=0, sticky="w")
-        phase_box = ttk.Combobox(process, textvariable=self.phase_mode, values=self.PHASE_MODES, state="readonly", width=31)
-        phase_box.grid(row=1, column=1, sticky="ew", pady=2)
-        phase_box.bind("<<ComboboxSelected>>", lambda _: self._refresh())
-        phase_help = tk.Label(process, text="?", width=2, relief="solid", borderwidth=1, background="#eef3f8", cursor="hand2")
-        phase_help.grid(row=1, column=2, padx=(5, 0))
-        HoverTooltip(phase_help, lambda: tr("Automatic phase minimizes dispersive/negative signal in the expected nucleus range. Saved TopSpin phase uses PHC0/PHC1 from procs. Magnitude is phase-independent but broadens line shapes."))
-        fields = (
-            ("Additional line broadening (Hz)", self.extra_lb, 2),
-            ("P0 adjustment (degrees)", self.phase0, 3),
-            ("P1 adjustment (degrees)", self.phase1, 4),
-            ("Vertical offset", self.vertical_offset, 5),
-        )
-        for label, variable, row_number in fields:
-            ttk.Label(process, text=label).grid(row=row_number, column=0, sticky="w")
-            ttk.Entry(process, textvariable=variable, width=12).grid(row=row_number, column=1, sticky="e", pady=1)
-        ttk.Checkbutton(process, text="Linear edge baseline", variable=self.baseline, command=self._refresh).grid(row=6, column=0, columnspan=3, sticky="w")
-        ttk.Checkbutton(process, text="Normalize each spectrum", variable=self.normalization, command=self._refresh).grid(row=7, column=0, columnspan=3, sticky="w")
-        ttk.Checkbutton(process, text="Mark peaks", variable=self.peaks, command=self._refresh).grid(row=8, column=0, sticky="w")
-        ttk.Entry(process, textvariable=self.prominence, width=10).grid(row=8, column=1, sticky="e")
-        ttk.Button(process, text="Apply processing", command=self._refresh).grid(row=9, column=0, columnspan=3, sticky="ew", pady=(5, 0))
-        ttk.Button(process, text="View acquisition details…", command=self.view_details).grid(row=10, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-        process.columnconfigure(1, weight=1)
-
-        options = PlotOptions("Chemical shift", "ppm", "Intensity", "a.u.", line_width=2.0, reverse_x=True, x_min=-20.0, x_max=250.0, x_tick=50.0)
-        self.plot = PlotPane(graph, self._draw, options)
-        self.plot.pack(fill="both", expand=True)
-        self._cache: dict[tuple, np.ndarray] = {}
-
-    def add_dialog(self):
-        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Bruker/TopSpin ZIP"), "*.zip"), (tr("All files"), "*.*")))
-        self.add_paths(paths)
-
-    def add_paths(self, paths):
-        loaded: list[Spectrum] = []
-        skipped: list[str] = []
-        for path in paths:
-            try:
-                spectra, omitted = parse_bruker_zip(path)
-                loaded.extend(spectra)
-                skipped.extend(f"{Path(path).name}: {item}" for item in omitted)
-            except Exception as exc:
-                messagebox.showerror(tr("ssNMR import"), f"{Path(path).name}\n{exc}", parent=self)
-        if loaded:
-            self.tree.add(loaded)
-            carbon_count = sum(item.metadata.get("nucleus") == "13C" for item in loaded)
-            text = tr("Imported {count} one-dimensional spectra; {carbon} are 13C spectra.", count=len(loaded), carbon=carbon_count)
-            if skipped:
-                text += "\n\n" + tr("Skipped:") + "\n" + "\n".join(skipped)
-            messagebox.showinfo(tr("ssNMR import"), text, parent=self)
-
-    @staticmethod
-    def _float(variable: tk.StringVar, default: float = 0.0) -> float:
-        try:
-            return float(variable.get())
-        except ValueError:
-            return default
-
-    def _processed(self, spectrum: Spectrum) -> np.ndarray:
-        mode = canonical(self.phase_mode.get())
-        extra_lb = self._float(self.extra_lb)
-        phase0, phase1 = self._float(self.phase0), self._float(self.phase1)
-        key = (spectrum.uid, self.saved_window.get(), mode, extra_lb, phase0, phase1, self.baseline.get(), self.normalization.get())
-        if key not in self._cache:
-            metadata = spectrum.metadata
-            _x, values = process_bruker_1d(
-                metadata["raw_fid"], metadata["acquisition"], metadata["processing"],
-                use_saved_window=self.saved_window.get(), phase_mode=mode,
-                extra_line_broadening=extra_lb, phase0=phase0, phase1=phase1,
-                baseline=self.baseline.get(), normalize=self.normalization.get(),
-            )
-            self._cache[key] = values
-        return self._cache[key]
-
-    def _draw(self, axis, options):
-        visible = self.tree.visible()
-        offset = self._float(self.vertical_offset)
-        for curve_index, spectrum in enumerate(visible):
-            values = self._processed(spectrum) + curve_index * offset
-            kwargs = {"color": spectrum.metadata["color"]} if spectrum.metadata.get("color") else {}
-            line, = axis.plot(spectrum.x, values, label=spectrum.name, linewidth=options.line_width, **kwargs)
-            if self.peaks.get():
-                prominence = max(0.0, self._float(self.prominence, 0.05))
-                for index in ftir_peak_indices(values, prominence, troughs=False):
-                    axis.annotate(f"{spectrum.x[index]:.1f}", (spectrum.x[index], values[index]), xytext=(0, 8), textcoords="offset points", ha="center", va="bottom", fontsize=max(7, options.font_size - 3), color=line.get_color(), rotation=90)
-        if not visible:
-            axis.text(0.5, 0.5, tr("Add a Bruker ssNMR ZIP archive"), ha="center", va="center", transform=axis.transAxes)
-
-    def view_details(self):
-        selected = list(self.tree.tree.selection())
-        if len(selected) != 1:
-            messagebox.showinfo(tr("Acquisition details"), tr("Select exactly one spectrum."), parent=self)
-            return
-        spectrum = next(item for item in self.tree.spectra if item.uid == selected[0])
-        metadata = spectrum.metadata
-        acquisition, processing = metadata["acquisition"], metadata["processing"]
-        lines = (
-            f"{tr('Experiment')}: {metadata.get('experiment', '')}",
-            f"{tr('Nucleus')}: {metadata.get('nucleus', '')}",
-            f"{tr('Pulse program')}: {metadata.get('pulse_program', '')}",
-            f"{tr('Title')}: {metadata.get('title', '')}",
-            f"{tr('Scans')}: {metadata.get('ns', '')}",
-            f"{tr('MAS rate')}: {metadata.get('mas_hz', 0) / 1000:g} kHz",
-            f"{tr('Spectral width')}: {float(acquisition.get('SW_h', 0)):g} Hz",
-            f"{tr('Saved line broadening')}: {float(processing.get('LB', 0)):g} Hz",
-            f"PHC0 / PHC1: {processing.get('PHC0', 0)} / {processing.get('PHC1', 0)}",
-            f"{tr('Group delay')}: {acquisition.get('GRPDLY', 0)}",
-        )
-        messagebox.showinfo(tr("Acquisition details"), "\n".join(lines), parent=self)
 
     def _refresh(self):
         if hasattr(self, "plot"):
@@ -1914,7 +1818,7 @@ class SeriesColorSettingsExtension:
 
     def _choose_color(self, variable: tk.StringVar):
         parent = self._settings_window if self._settings_window and self._settings_window.winfo_exists() else None
-        selected = colorchooser.askcolor(color=variable.get() or "#1F77B4", parent=parent)[1]
+        selected = colorchooser.askcolor(color=variable.get() or SERIES_PALETTE[0], parent=parent)[1]
         if selected:
             variable.set(selected.upper())
         if parent is not None and parent.winfo_exists():
@@ -2933,7 +2837,7 @@ class LabPlotterApp(tk.Tk):
             tab._refresh()
 
     def smart_import(self):
-        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Lab data"), "*.csv *.txt *.tsv *.xml *.xlsx *.xlsm *.zip *.tif *.tiff"), (tr("All files"), "*.*")))
+        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Lab data"), "*.csv *.txt *.tsv *.xml *.xlsx *.xlsm *.asc *.tif *.tiff"), (tr("All files"), "*.*")))
         tem_paths = [path for path in paths if Path(path).suffix.casefold() in TIFF_SUFFIXES]
         if tem_paths:
             self.tem.add_paths(tem_paths)

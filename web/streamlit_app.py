@@ -16,14 +16,13 @@ import streamlit as st
 
 from labplotter import __version__
 from labplotter.models import Spectrum, ZetaMeasurement
-from labplotter.plotting import PlotOptions, figure_png_bytes
+from labplotter.plotting import PlotOptions, figure_png_bytes, SERIES_PALETTE, validate_figure_ratio
 from labplotter.tem import TEMAnalysisParameters, TEMImageAnalysis
 from labplotter.web import (
     figure_svg_bytes,
     parse_generic_payload,
     parse_uploaded_payload,
     processed_ftir_spectra,
-    processed_nmr_spectrum,
     spectra_figure,
     tem_distribution_figure,
     tem_overlay_figure,
@@ -121,9 +120,14 @@ KO = {
     "Processing uploaded files…": "업로드 파일 처리 중…",
     "File error": "파일 오류",
     "Web limitations": "웹 버전 제한",
-    "Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only in 0.8.1.": "지속형 로컬 라이브러리, Windows 클립보드 내보내기, OCR 결과 직접 수정 및 .labpatch 업데이트는 0.8.1에서 데스크톱 전용입니다.",
+    "Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only.": "지속형 로컬 라이브러리, Windows 클립보드 내보내기, OCR 결과 직접 수정 및 .labpatch 업데이트는 0.8.1에서 데스크톱 전용입니다.",
 }
 
+
+from labplotter.nmr_labels import KO as NMR_KO
+KO.update(NMR_KO)
+from labplotter.plot_labels import KO as PLOT_KO
+KO.update(PLOT_KO)
 
 def t(text: str) -> str:
     return KO.get(text, text) if st.session_state.get("language", "English") == "한국어" else text
@@ -163,16 +167,6 @@ def _generic_cached(filename: str, payload: bytes, profile_items: tuple[tuple[st
     return result
 
 
-def _process_nmr_cached(spectrum: Spectrum, **options: Any) -> Spectrum:
-    cache = st.session_state.setdefault("_processed_nmr", {})
-    key = (spectrum.uid, tuple(sorted(options.items())))
-    if key not in cache:
-        if len(cache) >= 64:
-            cache.clear()
-        cache[key] = processed_nmr_spectrum(spectrum, **options)
-    return cache[key]
-
-
 def _parse_many(uploaded_files, kind: str, tem_values: tuple[Any, ...] | None = None):
     results, errors = [], []
     if not uploaded_files:
@@ -206,7 +200,7 @@ def _spectrum_selector(spectra: list[Spectrum], prefix: str) -> list[Spectrum]:
 
 
 def _series_colors(items: list[tuple[str, str]], prefix: str) -> dict[str, str]:
-    defaults = ("#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD", "#8C564B", "#E377C2", "#7F7F7F")
+    defaults = SERIES_PALETTE
     result: dict[str, str] = {}
     with st.expander(t("Series colors"), expanded=False):
         columns = st.columns(2)
@@ -216,8 +210,29 @@ def _series_colors(items: list[tuple[str, str]], prefix: str) -> dict[str, str]:
     return result
 
 
+def _ratio_controls(prefix: str):
+    def reset(square=False):
+        st.session_state[prefix+'-fixed-ratio'] = square
+        st.session_state[prefix+'-ratio-width'] = 1.0 if square else 8.5
+        st.session_state[prefix+'-ratio-height'] = 1.0 if square else 6.2
+    fixed = st.checkbox(t('Fix graph width : height'), key=prefix+'-fixed-ratio')
+    cols = st.columns(2)
+    width = cols[0].number_input(t('Width'), min_value=0.1, max_value=100.0, value=8.5, step=0.1, key=prefix+'-ratio-width')
+    height = cols[1].number_input(t('Height'), min_value=0.1, max_value=100.0, value=6.2, step=0.1, key=prefix+'-ratio-height')
+    cols[0].button(t('Square (1:1)'), key=prefix+'-square', on_click=reset, args=(True,))
+    cols[1].button(t('Restore default ratio'), key=prefix+'-ratio-reset', on_click=reset)
+    st.caption(t('The ratio includes axis labels and is preserved in preview and image downloads.'))
+    if fixed:
+        try:
+            return validate_figure_ratio(width, height)
+        except ValueError:
+            st.error(t('Graph width and height must be positive; width/height must be between 0.1 and 10.'))
+    return None
+
+
 def _plot_options(prefix: str, defaults: dict[str, Any]) -> PlotOptions:
     with st.expander(t("Plot settings"), expanded=False):
+        ratio = _ratio_controls(prefix)
         first = st.columns(4)
         x_label = first[0].text_input(t("X-axis name"), defaults.get("x_label", "X"), key=f"{prefix}-xlabel")
         x_unit = first[1].text_input(t("X-axis unit"), defaults.get("x_unit", ""), key=f"{prefix}-xunit")
@@ -249,13 +264,13 @@ def _plot_options(prefix: str, defaults: dict[str, Any]) -> PlotOptions:
         font_size=font_size, line_width=line_width, spine_width=spine_width,
         tick_width=tick_width, tick_length=tick_length, reverse_x=reverse_x,
         legend=legend, background="Dark" if dark else "White", x_min=x_min,
-        x_max=x_max, y_min=y_min, y_max=y_max, x_tick=x_tick, y_tick=y_tick,
+        x_max=x_max, y_min=y_min, y_max=y_max, x_tick=x_tick, y_tick=y_tick, figure_ratio=ratio,
     )
 
 
 def _show_figure(figure, prefix: str) -> None:
-    st.pyplot(figure, width="stretch")
     png = figure_png_bytes(figure)
+    st.image(png, width="stretch")
     svg = figure_svg_bytes(figure)
     buttons = st.columns(2)
     buttons[0].download_button(t("Download PNG"), png, f"LabPlotter_{prefix}.png", "image/png", key=f"{prefix}-png")
@@ -321,34 +336,8 @@ def nanodrop_page() -> None:
 
 
 def nmr_page() -> None:
-    uploaded = st.file_uploader(t("Files"), type=["zip"], accept_multiple_files=True, key="nmr-files")
-    results, errors = _parse_many(uploaded, "ssNMR")
-    _errors(errors)
-    spectra = [spectrum for result in results for spectrum in (result.spectra or [])]
-    skipped = [message for result in results for message in (result.skipped or [])]
-    if skipped:
-        with st.expander(t("Skipped experiments")):
-            st.write("\n".join(f"- {message}" for message in skipped))
-    if not spectra:
-        st.info(t("No usable data were found in the uploaded files."))
-        return
-    spectra = _spectrum_selector(spectra, "nmr")
-    with st.expander(t("NMR processing"), expanded=True):
-        columns = st.columns(3)
-        phase_mode = columns[0].selectbox(t("Phase mode"), ["Automatic phase", "Saved TopSpin phase", "Magnitude (phase independent)", "No phase correction"], key="nmr-phase")
-        line_broadening = columns[1].number_input(t("Extra line broadening (Hz)"), 0.0, 1000.0, 0.0, 1.0, key="nmr-lb")
-        baseline = columns[2].checkbox(t("Linear baseline"), False, key="nmr-baseline")
-        columns = st.columns(3)
-        phase0 = columns[0].number_input(t("Zero-order phase (°)"), -360.0, 360.0, 0.0, 1.0, key="nmr-p0")
-        phase1 = columns[1].number_input(t("First-order phase (°)"), -720.0, 720.0, 0.0, 1.0, key="nmr-p1")
-        normalize_values = columns[2].checkbox(t("Normalize maximum"), True, key="nmr-normalize")
-    processed = [_process_nmr_cached(
-        item, phase_mode=phase_mode, extra_line_broadening=line_broadening,
-        phase0=phase0, phase1=phase1, baseline=baseline, normalize_values=normalize_values,
-    ) for item in spectra]
-    colors = _series_colors([(item.uid, item.name) for item in processed if item.visible], "nmr")
-    options = _plot_options("nmr", {"x_label": "Chemical shift", "x_unit": "ppm", "y_label": "Intensity", "y_unit": "a.u.", "reverse_x": True})
-    _show_figure(spectra_figure(processed, options, colors=colors), "ssNMR")
+    from web.nmr_page import render_nmr_page
+    render_nmr_page(t, _show_figure, _ratio_controls)
 
 
 def zeta_page() -> None:
@@ -457,7 +446,8 @@ def tem_page() -> None:
     st.subheader(t("Batch summary"))
     st.dataframe(summaries, width="stretch")
     st.subheader(t("Particle-size distributions"))
-    _show_figure(tem_distribution_figure(analyses), "TEM_distribution")
+    options = _plot_options("tem-distribution", {"x_label": "Particle diameter", "x_unit": "nm", "y_label": "Density", "y_unit": ""})
+    _show_figure(tem_distribution_figure(analyses, options), "TEM_distribution")
     st.download_button(t("Download particle CSV"), _tem_csv(analyses), "LabPlotter_TEM_particles.csv", "text/csv")
 
 
@@ -507,7 +497,7 @@ def main() -> None:
     with st.expander(t("About"), expanded=False):
         st.write(t("The web edition reuses the same parsing, processing, NMR, ZetaSizer, and TEM analysis core as the Windows edition."))
         st.info(t("Uploaded files are processed only for this browser session. Download your results before closing the page."))
-        st.warning(t("Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only in 0.8.1."))
+        st.warning(t("Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only."))
         st.markdown(f"**{t('Contact and feedback')}**  \n{t('Jun Min Moon · moonkeving@gmail.com')}")
     tabs = st.tabs(["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "TEM", t("Custom format")])
     pages = (ftir_page, nanodrop_page, nmr_page, zeta_page, tem_page, custom_page)

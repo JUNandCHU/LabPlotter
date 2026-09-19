@@ -6,21 +6,21 @@ from pathlib import Path
 import tempfile
 from typing import Any, Iterable
 
-from matplotlib import colormaps
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle
 import numpy as np
 from PIL import Image, ImageOps
 
 from .models import Spectrum, ZetaMeasurement
-from .nmr import parse_bruker_zip, process_bruker_1d
+from .nmr import parse_topspin_ascii
 from .parsers import (
     parse_ftir_file,
     parse_generic_with_profile,
     parse_nanodrop_file,
     parse_zetasizer_workbook,
 )
-from .plotting import PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text
+from .plotting import (PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text,
+                       SERIES_PALETTE, save_plot_figure)
 from .processing import ftir_peak_indices, mean_curve, normalize, process_ftir
 from .tem import TEMAnalysisParameters, TEMImageAnalysis, analyze_tem_image
 
@@ -73,10 +73,10 @@ def parse_uploaded_payload(
                 spectrum.source = name
             return WebParseResult(kind, spectra=spectra)
         if kind == "ssNMR":
-            spectra, skipped = parse_bruker_zip(path)
+            spectra = [parse_topspin_ascii(path)]
             for spectrum in spectra:
                 spectrum.source = name
-            return WebParseResult(kind, spectra=spectra, skipped=skipped)
+            return WebParseResult(kind, spectra=spectra)
         if kind == "ZetaSizer":
             measurements = parse_zetasizer_workbook(path)
             for measurement in measurements:
@@ -111,42 +111,8 @@ def processed_ftir_spectra(spectra: Iterable[Spectrum], **options: Any) -> list[
     return output
 
 
-def processed_nmr_spectrum(
-    spectrum: Spectrum,
-    *,
-    phase_mode: str = "Automatic phase",
-    extra_line_broadening: float = 0.0,
-    phase0: float = 0.0,
-    phase1: float = 0.0,
-    baseline: bool = False,
-    normalize_values: bool = False,
-) -> Spectrum:
-    metadata = spectrum.metadata
-    raw_fid = metadata.get("raw_fid")
-    acquisition = metadata.get("acquisition")
-    processing = metadata.get("processing")
-    if raw_fid is None or not isinstance(acquisition, dict) or not isinstance(processing, dict):
-        values = np.asarray(spectrum.y, dtype=float)
-        if normalize_values:
-            values = normalize(values, "Maximum = 1")
-        return replace(spectrum, y=values, metadata=dict(metadata))
-    x, y = process_bruker_1d(
-        raw_fid,
-        acquisition,
-        processing,
-        phase_mode=phase_mode,
-        extra_line_broadening=extra_line_broadening,
-        phase0=phase0,
-        phase1=phase1,
-        baseline=baseline,
-        normalize=normalize_values,
-    )
-    return replace(spectrum, x=x, y=y, metadata=dict(metadata))
-
-
 def _default_colors(count: int) -> list[str]:
-    cmap = colormaps["tab20"]
-    return [cmap(index % 20) for index in range(max(1, count))]
+    return [SERIES_PALETTE[index % len(SERIES_PALETTE)] for index in range(max(1, count))]
 
 
 def _style_legend(axis, options: PlotOptions) -> None:
@@ -306,7 +272,7 @@ def tem_overlay_figure(payload: bytes, analysis: TEMImageAnalysis) -> Figure:
     return figure
 
 
-def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis]) -> Figure:
+def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis], options: PlotOptions | None = None) -> Figure:
     grouped: dict[str, list[float]] = {}
     for analysis in analyses:
         if analysis.included and analysis.status == "analyzed":
@@ -320,7 +286,7 @@ def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis]) -> Figure:
             continue
         bins = min(40, max(8, int(np.sqrt(data.size) * 2)))
         axis.hist(data, bins=bins, density=True, histtype="step", linewidth=2.0, color=colors[index], label=f"{batch} (n={len(data)})")
-    options = PlotOptions("Particle diameter", "nm", "Density", "", font_family="DejaVu Sans", reverse_x=False)
+    options = options or PlotOptions("Particle diameter", "nm", "Density", "", font_family="DejaVu Sans", reverse_x=False)
     apply_origin_style(figure, axis, options)
     _style_legend(axis, options)
     return figure
@@ -328,7 +294,7 @@ def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis]) -> Figure:
 
 def figure_svg_bytes(figure: Figure) -> bytes:
     buffer = BytesIO()
-    figure.savefig(buffer, format="svg", bbox_inches="tight")
+    save_plot_figure(figure, buffer, format="svg")
     return buffer.getvalue()
 
 
@@ -339,7 +305,6 @@ __all__ = [
     "parse_generic_payload",
     "parse_uploaded_payload",
     "processed_ftir_spectra",
-    "processed_nmr_spectrum",
     "spectra_figure",
     "tem_distribution_figure",
     "tem_overlay_figure",

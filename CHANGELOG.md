@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.5 — 2026-09-19
+
+- Added Aliphatic region / Aromatic region buttons to desktop and web spectrum comparison. Each click uses the current region bounds and immediately updates the plot and overall comparison statistics without rerunning preprocessing.
+- Invalid or unmeasured region selections leave the current comparison range intact and show a clear message.
+
+## 0.8.4 — 2026-09-19
+
+- Fixed clipped ssNMR list/library text by sizing rows from the actual UI font.
+- Added separately audited R², Pearson r/r² and point counts for the comparison, aliphatic and aromatic regions; changing bounds automatically updates statistics and ratios.
+- Added common graph width:height controls, a square preset and default-ratio restoration. Desktop preview/clipboard/PNG/SVG/PDF and web preview/downloads preserve the selected full-figure ratio.
+- Applied the requested seven-color RGB order across desktop and web curves, bars and TEM distributions; explicit per-series colors remain supported.
+
+## 0.8.3 — 2026-09-19
+
+- Replaced Bruker ZIP/FID ssNMR import with four-column TopSpin ASCII (ppm column 4, intensity column 2), preserving title-bearing first data rows.
+- Added a desktop raw-spectrum list, rename/remove actions, and independent persistent ssNMR library with reload/rename/delete/reorder.
+- Added shared-grid paired comparison with native edge-baseline correction, bounded rigid chemical-shift alignment, shared Gaussian broadening and normalization. Real-only exported phase is preserved and explicitly reported.
+- Added direct R², Pearson r/r² and configurable aliphatic/aromatic signed integral ratios below the overlay.
+- Added complete per-point preprocessing/statistics and per-segment integration audit windows, TXT exports and comparison CSV.
+- Added the same processing and metrics to the web edition with a portable JSON session library and Korean/English labels.
+
 ## 0.8.2 — 2026-08-10
 
 - Made the desktop ZetaSizer DLS and zeta distribution legends directly draggable.

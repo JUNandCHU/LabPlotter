@@ -1,4 +1,4 @@
-# LabPlotter 0.8.2
+# LabPlotter 0.8.5
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
@@ -24,6 +24,13 @@ FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고
 - 다른 프로그램이 클립보드를 잠근 경우 짧게 재시도하며 실패 시 안전하게 메모리 해제
 - 한글 축 제목이나 범례가 있으면 Windows의 `Malgun Gothic` 등 설치된 한글 지원 글꼴을 자동 선택
 - 상단 `Contact…`에서 관리자 이름과 이메일, 피드백 안내 확인 및 이메일 복사
+
+### 공통 그래프 비율과 기본 색상 (0.8.4)
+
+- `Graph settings… → Graph ratio`에서 가로:세로를 고정할 수 있습니다. `Square (1:1)`은 정사각형, `Restore default ratio`는 창 크기에 맞추는 기본 모드입니다. 다른 설정을 바꾸지 않고 비율만 복원할 수 있습니다.
+- 비율은 축 제목을 포함한 전체 그림에 적용되며, X/Y 데이터 단위나 축 범위를 바꾸지 않습니다. 미리보기·클립보드·PNG·SVG·PDF에 동일하게 적용하고 고정 비율에서는 자동 잘라내기로 비율이 바뀌지 않습니다. 가로/세로는 0.1~10 범위입니다.
+- 웹도 그래프 설정의 가로/세로·정사각형·기본 비율 복원을 지원하며 미리보기와 다운로드의 비율이 같습니다.
+- 기본 데이터 색상 순서는 RGB `(0,0,0)`, `(192,0,0)`, `(0,32,96)`, `(164,159,159)`, `(0,108,49)`, `(64,31,104)`, `(184,112,24)`입니다. 이후에는 추가 팔레트를 사용합니다. 사용자가 지정한 개별 색상도 지원합니다.
 
 ### FTIR
 
@@ -53,23 +60,37 @@ FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고
 
 NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorbance입니다. Absorbance는 엄밀히 무차원이므로 기본 Y축 단위는 비워 두었습니다. 필요하면 그래프 설정에서 `a.u.`를 입력할 수 있습니다.
 
-### Solid-state NMR
+### Solid-state NMR (0.8.5)
 
-- Bruker/TopSpin 측정 폴더의 ZIP 파일을 압축 해제하지 않고 직접 import
-- `acqus`, `procs`, raw `fid`에서 1D spectrum과 ppm 축 복원
-- raw data byte order/type, digital group delay, 저장된 exponential window, zero filling 정보 반영
-- 다음 위상 표시 방식 지원
-  - Automatic phase: 해당 핵종 범위에서 분산형/음의 신호를 줄이는 자동 위상 보정
-  - Saved TopSpin phase: `procs`의 PHC0/PHC1 사용
-  - Magnitude: 위상과 무관한 크기 스펙트럼
-  - No phase correction
-- 추가 line broadening, P0/P1 미세조정, 양 끝 직선 baseline, 개별 spectrum 정규화
-- 여러 ZIP과 여러 experiment overlay, 개별 표시/숨김·이름·색상, vertical offset, peak 표시
-- experiment, nucleus, pulse program, title, scans, MAS rate, spectral width, saved LB 및 group delay 확인
-- ZIP에 13C가 있으면 탄소 스펙트럼을 기본 표시하고 1H calibration 데이터는 목록에만 보존
-- `ser` 기반 pseudo-2D/2D experiment는 현재 1D 탭에서 제외하고 import 결과에 사유 표시
+`Import ASCII TXT…`로 TopSpin의 **4열 ASCII**를 가져옵니다. **4열 ppm / 2열 intensity**를 사용하며 첫 줄의 1열에 제목이 있어도 측정점은 보존합니다. 이름은 파일명에서 확장자를 제외한 값이고 언제든 변경할 수 있습니다. ZIP/FID 가져오기는 제거했습니다.
 
-제공된 `20260216_25mm_PDA.zip`에는 processed `1r` 파일이 없으므로 raw FID에서 spectrum을 다시 계산합니다. Experiment 3의 13C CP와 experiment 4의 13C multiCP는 기본 표시되고, experiment 1의 1H one-pulse는 숨김 상태로 import되며 experiment 2의 saturation-recovery pseudo-2D `ser`는 제외됩니다. Raw 재처리 결과는 저장된 TopSpin 처리 파라미터와 자동 위상 보정을 사용하지만, 논문용 최종 정량/위상 결과는 원래 TopSpin 처리 결과와 함께 확인하는 것이 좋습니다.
+1. 왼쪽 목록에서 항목을 클릭하면 오른쪽에 해당 원본 스펙트럼이 표시됩니다.
+2. `Save to library`는 선택한 원본 데이터를 별도 `ssnmr_library.sqlite3`에 저장합니다. 이 파일은 앱 설치 폴더 밖의 사용자 데이터 폴더에 있어 업데이트 후에도 유지됩니다.
+3. `Open ssNMR library…`에서 저장 데이터를 재불러오기·이름 변경·삭제·순서 변경할 수 있습니다. 현재 목록에서 제거하는 동작과 라이브러리 삭제는 독립적입니다.
+4. `Compare two spectra…` → 기준 A와 비교 B 선택 → 전처리 설정 → `Process and compare`를 누르면 별도 비교 창이 열립니다.
+5. 비교 창의 ppm 범위와 적분 구간을 바꾸면 결과가 자동으로 갱신됩니다. `Calculate / update range`로 즉시 적용할 수도 있습니다. 전체 비교 구간·Aliphatic·Aromatic 각각의 R², r², r, N과 두 스펙트럼의 적분비가 **그래프 아래**에 표시됩니다. 두 검증 버튼은 세 구간의 계산 과정과 전처리 내역을 별도 창으로 엽니다.
+
+`Aliphatic region` / `Aromatic region` 버튼은 현재 입력된 해당 구간으로 그래프와 전체 비교 범위를 즉시 전환하고 R²·r²를 갱신합니다. 구간을 수정하면 버튼도 수정한 값을 사용합니다. 전처리와 정규화는 다시 수행하지 않습니다.
+
+전처리 기본값:
+
+- ppm 범위는 두 파일의 전체 범위를 포함합니다. 공통 격자 간격은 두 입력 중 더 거친 간격을 기준으로 하며, 정확한 양끝점을 포함하기 위해 실제 간격이 미세 조정될 수 있습니다. 범위 밖 값은 NaN으로 남기고 외삽하거나 0으로 채우지 않습니다.
+- 실수 intensity만 있는 ASCII에는 허수 스펙트럼/FID가 없습니다. **내보낸 TopSpin 위상을 유지**하고 복소 위상 보정은 수행하지 않았음을 표시합니다.
+- 각 원본 전체 범위의 양끝 3% 중앙값으로 직선 베이스라인을 구해 뺍니다. 구간 양끝에 실제 피크가 있다면 설정을 검토하거나 보정을 끌 수 있습니다.
+- B에 최대 ±2 ppm의 일정한 이동을 적용해 기준 A와 정렬합니다. 전 구간 또는 지정 구간의 Pearson r을 최대화하며 이동량을 기록합니다. 형태를 늘이거나 부분적으로 왜곡하지 않습니다. 서로 다른 화학종의 피크 차이가 있는 경우 정렬 구간을 제한하거나 정렬을 끌 수 있습니다.
+- 두 데이터에 동일한 추가 Gaussian FWHM 0.3 ppm을 적용합니다. 0으로 설정하면 끕니다. 기존 TopSpin broadening을 되돌리거나 서로 다른 원래 해상도를 같게 만드는 기능은 아닙니다.
+- 공통 측정 범위의 최대 절대 intensity로 각각 정규화합니다. 전체 절대 면적 정규화 또는 정규화 없음도 가능합니다. 비교 창에서 통계 범위만 바꾸면 전처리는 바뀌지 않습니다.
+
+계산 정의:
+
+- 세 통계 구간은 동일하게 전처리한 곡선을 사용하며 구간별로 다시 정규화하지 않습니다. Aliphatic/Aromatic 통계는 각각의 적분 경계값과 연동하고, 전체 비교 구간과 독립적으로 계산합니다. 실제 사용된 격자점과 ppm 범위는 검증 내역에 기록됩니다.
+
+- **R² (직접 일치도)** = `1 − Σ(A−B)² / Σ(A−mean(A))²`. A가 기준이며 회귀로 B의 크기나 오프셋을 다시 맞추지 않습니다. 음수가 될 수 있습니다.
+- **r²** = Pearson r의 제곱. r도 같이 표시하므로 양/음의 상관을 구별할 수 있습니다. 상수 스펙트럼은 정의되지 않는 값을 `Undefined`로 표시합니다.
+- **적분비** = signed `I(0–50 ppm) / I(90–160 ppm)`가 기본이며 각 경계는 수정할 수 있습니다. ppm을 오름차순으로 놓고 정확한 경계점의 intensity를 선형 보간한 뒤 사다리꼴 면적을 합산합니다. 음의 값을 0으로 바꾸거나 절댓값 처리하지 않습니다. 영역 전체가 측정 범위에 들어와야 하며 분모가 거의 0이면 계산 불가입니다.
+- 검증 창에는 적용한 설정, 입력 해시, 이동량, 정규화 계수, 처리 단계별 각 점, 평균·잔차·제곱합 및 모든 적분 조각과 누적 면적이 포함됩니다. 전체 내역 TXT 및 처리 스펙트럼 CSV를 저장할 수 있습니다.
+
+웹도 동일한 계산 코어를 사용합니다. 웹 라이브러리는 브라우저 세션별이며 `Download library JSON`으로 원본·이름·순서를 저장하고 다음 접속 때 다시 가져옵니다. 다른 사용자와 공유하는 서버 DB는 만들지 않습니다.
 
 ### ZetaSizer particle library
 
