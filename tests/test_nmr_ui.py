@@ -4,10 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 import tkinter as tk
+from tkinter import font as tkfont
+from unittest.mock import patch
+from io import BytesIO
+from PIL import Image
 import numpy as np
 from labplotter.models import Spectrum
 from labplotter.nmr_library import NMRLibrary
-from labplotter.nmr_ui import SSNMRTab, ComparisonWindow, PreprocessingDialog, AuditWindow
+from labplotter.nmr_ui import SSNMRTab, ComparisonWindow, PreprocessingDialog, AuditWindow, nmr_tree_style
 
 
 class NMRDesktopWorkflowTests(unittest.TestCase):
@@ -64,6 +68,39 @@ class NMRDesktopWorkflowTests(unittest.TestCase):
         window.fields['low'].set('0');self.assertIsNone(window.metrics)
         window.fields['high'].set('200');window.calculate()
         self.assertEqual(window.metrics['requested_range_ppm'],[0,200])
+        before=window.region_metrics['Aliphatic region']['R2']
+        window.fields['ahigh'].set('30')
+        self.root.after(500,self.root.quit);self.root.mainloop();self.root.update()
+        self.assertEqual(window.region_metrics['Aliphatic region']['requested_range_ppm'],[0,30])
+        self.assertNotEqual(window.region_metrics['Aliphatic region']['R2'],before)
+        self.assertFalse(self.errors)
+
+    def test_large_font_rows_and_square_clipboard_then_default_restore(self):
+        font=tkfont.nametofont('TkDefaultFont');previous=font.cget('size')
+        try:
+            font.configure(size=18);nmr_tree_style(self.tab)
+            self.tab.add_spectra([self.a,self.b]);self.root.update()
+            height=self.tab.tree.bbox(self.a.uid)[3]
+            self.assertGreaterEqual(height,font.metrics('linespace')+8)
+            self.tab.tree.selection_set(self.a.uid);self.tab.save();self.tab.open_library();self.root.update()
+            self.assertGreaterEqual(self.tab.library_window.tree.bbox(self.a.uid)[3],font.metrics('linespace')+8)
+        finally:
+            font.configure(size=previous);nmr_tree_style(self.tab)
+        plot=self.tab.plot
+        plot.open_settings();self.root.update()
+        plot.set_figure_ratio((1,1))
+        self.root.after(160,self.root.quit);self.root.mainloop();self.root.update()
+        widget=plot.canvas.get_tk_widget()
+        self.assertEqual(widget.winfo_width(),widget.winfo_height())
+        with patch('labplotter.ui.copy_png_to_clipboard') as copy,patch('labplotter.ui.messagebox.showinfo'):
+            plot.copy_image()
+            png=Image.open(BytesIO(copy.call_args.args[0]))
+            self.assertEqual(png.width,png.height)
+        plot.set_figure_ratio()
+        self.root.after(160,self.root.quit);self.root.mainloop();self.root.update()
+        self.assertIsNone(plot.options.figure_ratio)
+        self.assertEqual(widget.winfo_width(),plot.canvas_host.winfo_width())
+        self.assertEqual(widget.winfo_height(),plot.canvas_host.winfo_height())
         self.assertFalse(self.errors)
 
 

@@ -2,17 +2,17 @@
 from __future__ import annotations
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox, simpledialog, font as tkfont
 from tkinter.scrolledtext import ScrolledText
 
 import numpy as np
 from .i18n import tr
 from .models import Spectrum
 from .nmr import (PHASE_NOTE, ComparisonSettings, default_settings, parse_topspin_ascii,
-                  preprocess_pair, comparison_metrics, integral_ratios, metrics_audit,
+                  preprocess_pair, comparison_region_metrics, regional_metrics_audit, integral_ratios,
                   integrals_audit, preprocessing_audit, comparison_csv)
 from .nmr_library import NMRLibrary
-from .plotting import PlotOptions
+from .plotting import PlotOptions, SERIES_PALETTE
 
 
 def number(value):
@@ -29,30 +29,12 @@ def save_text(parent, content, filename, extension=".txt"):
             messagebox.showerror(tr("Export"), str(exc), parent=parent)
 
 
-def fit_plot_after_resize(plot):
-    """Recompute margins after Tk has set the final canvas size."""
-    pending = [None]
-    def layout():
-        pending[0] = None
-        if plot.winfo_exists():
-            widget = plot.canvas.get_tk_widget()
-            # A DPI change can resize the renderer without another Tk resize
-            # event when the canvas is constrained by its parent.
-            plot.figure.set_size_inches(widget.winfo_width() / plot.figure.dpi,
-                                        widget.winfo_height() / plot.figure.dpi,
-                                        forward=False)
-            plot.figure.tight_layout()
-            plot.canvas.draw_idle()
-    def resized(_event):
-        if pending[0] is not None:
-            plot.after_cancel(pending[0])
-        pending[0] = plot.after(80, layout)
-    def destroyed(event):
-        if event.widget is plot and pending[0] is not None:
-            plot.after_cancel(pending[0])
-            pending[0] = None
-    plot.canvas.get_tk_widget().bind('<Configure>', resized, add=True)
-    plot.bind('<Destroy>', destroyed, add=True)
+def nmr_tree_style(parent):
+    font = tkfont.nametofont("TkDefaultFont")
+    style = ttk.Style(parent)
+    style.configure("SSNMR.Treeview", font=font, rowheight=max(32, font.metrics("linespace")+12))
+    style.configure("SSNMR.Treeview.Heading", font=font, padding=(4, 6))
+    return "SSNMR.Treeview"
 
 
 class AuditWindow(tk.Toplevel):
@@ -127,6 +109,9 @@ class ComparisonWindow(tk.Toplevel):
         self.title(tr("Spectrum comparison")); self.geometry("1250x900"); self.minsize(950, 720)
         self.a_raw, self.b_raw, self.result = a, b, result
         self.metrics = self.ratios = None
+        self.region_metrics = {}
+        self._recalc_job = None
+        self.bind("<Destroy>", self._cancel_recalculation, add=True)
         self.rowconfigure(1, weight=1); self.columnconfigure(0, weight=1)
         top = ttk.Frame(self, padding=7); top.grid(row=0, column=0, sticky="ew")
         ttk.Label(top, text=f"A ({tr('reference')}): {a.name}     B: {b.name}", wraplength=1150).pack(anchor="w")
@@ -136,7 +121,6 @@ class ComparisonWindow(tk.Toplevel):
         self.process_label = ttk.Label(top, wraplength=1150, foreground="#555555"); self.process_label.pack(anchor="w")
         self.plot = PlotPane(self, self._draw, PlotOptions("Chemical shift", "ppm", "Intensity", "normalized a.u.", reverse_x=True), compact=True)
         self.plot.grid(row=1, column=0, sticky="nsew", padx=8)
-        fit_plot_after_resize(self.plot)
         lower = ttk.LabelFrame(self, text=tr("Comparison results"), padding=8); lower.grid(row=2, column=0, sticky="ew", padx=8, pady=8)
         bounds = ttk.Frame(lower); bounds.pack(fill="x")
         self.fields = {}
@@ -154,7 +138,7 @@ class ComparisonWindow(tk.Toplevel):
         ttk.Button(buttons, text=tr("R² / r² calculation details…"), command=self.metric_details).pack(side="left", padx=6)
         ttk.Button(buttons, text=tr("Integral calculation details…"), command=self.integral_details).pack(side="left")
         self.metric_text = tk.StringVar(); self.integral_text = tk.StringVar()
-        ttk.Label(lower, textvariable=self.metric_text, wraplength=1130, font=("TkDefaultFont", 11, "bold")).pack(anchor="w", pady=4)
+        ttk.Label(lower, textvariable=self.metric_text, wraplength=1130, font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=4)
         ttk.Label(lower, textvariable=self.integral_text, wraplength=1130).pack(anchor="w", pady=3)
         ttk.Label(lower, text=tr("R²: direct agreement with reference A (no fitted scaling). r²: squared Pearson r. Integrals use processed signed intensities and exact region boundaries."), wraplength=1130, foreground="#555555").pack(anchor="w", pady=3)
         for var in self.fields.values():
@@ -163,7 +147,16 @@ class ComparisonWindow(tk.Toplevel):
 
     def _invalidate(self, *_):
         self.metrics = self.ratios = None
-        self.metric_text.set(tr("Settings changed — click Calculate / update range.")); self.integral_text.set("")
+        self.region_metrics = {}
+        self.metric_text.set(tr("Updating results…")); self.integral_text.set("")
+        if self._recalc_job is not None:
+            self.after_cancel(self._recalc_job)
+        self._recalc_job = self.after(350, self.calculate)
+
+    def _cancel_recalculation(self, event):
+        if event.widget is self and self._recalc_job is not None:
+            self.after_cancel(self._recalc_job)
+            self._recalc_job = None
 
     def _process_status(self):
         r = self.result
@@ -172,29 +165,44 @@ class ComparisonWindow(tk.Toplevel):
         self.plot.vars['y_unit'].set('a.u.' if r.settings.normalization == 'None' else 'normalized a.u.')
 
     def _draw(self, axis, options):
-        for name, values, color in zip(self.result.names, (self.result.a, self.result.b), ("#1769AA", "#D35F2F")):
+        for name, values, color in zip(self.result.names, (self.result.a, self.result.b), SERIES_PALETTE[:2]):
             axis.plot(self.result.x, values, label=name, color=color, linewidth=options.line_width)
 
     def calculate(self):
+        if self._recalc_job is not None:
+            self.after_cancel(self._recalc_job)
+            self._recalc_job = None
         self.metrics = self.ratios = None
-        try:
-            low, high = float(self.fields['low'].get()), float(self.fields['high'].get())
-            self.metrics = comparison_metrics(self.result, low, high)
-            m = self.metrics
-            self.metric_text.set(f"R² = {number(m['R2'])}     r² = {number(m['r2'])}     r = {number(m['r'])}     N = {m['n']:,}     {tr('Used ppm')}: {m['used_range_ppm'][0]:.6g} … {m['used_range_ppm'][1]:.6g}")
+        # Invalid/partially typed entries are independent of the other ranges.
+        def value(key):
+            try:
+                return float(self.fields[key].get())
+            except ValueError:
+                return float('nan')
+        low, high = value('low'), value('high')
+        bounds = [value(k) for k in ('alow', 'ahigh', 'rlow', 'rhigh')]
+        self.region_metrics = comparison_region_metrics(self.result, (low,high), bounds[:2], bounds[2:])
+        lines = []
+        for label, m in self.region_metrics.items():
+            if 'error' in m:
+                lines.append(f"{tr(label)}: {m['error']}")
+            else:
+                lo, hi = m['requested_range_ppm']
+                lines.append(f"{tr(label)} ({lo:g}–{hi:g} ppm):   R² = {number(m['R2'])}   r² = {number(m['r2'])}   r = {number(m['r'])}   N = {m['n']:,}")
+        self.metric_text.set('\n'.join(lines))
+        overall = self.region_metrics['Comparison range']
+        if 'error' not in overall:
+            self.metrics = overall
             self.plot.vars['x_min'].set(str(low)); self.plot.vars['x_max'].set(str(high)); self.plot.refresh()
-        except (ValueError, TypeError) as exc:
-            self.metric_text.set(str(exc))
         try:
-            bounds = [float(self.fields[k].get()) for k in ('alow', 'ahigh', 'rlow', 'rhigh')]
             self.ratios = integral_ratios(self.result, bounds[:2], bounds[2:])
             self.integral_text.set('\n'.join(f"{row['name']}:    I({bounds[0]:g}–{bounds[1]:g}) = {number(row['aliphatic']['area'])}    I({bounds[2]:g}–{bounds[3]:g}) = {number(row['aromatic']['area'])}    {tr('Ratio')} = {number(row['ratio'])}" for row in self.ratios))
         except (ValueError, TypeError) as exc:
             self.integral_text.set(str(exc))
 
     def metric_details(self):
-        if self.metrics is not None:
-            AuditWindow(self, "R² / r² calculation details", metrics_audit(self.result, self.metrics), self.result)
+        if any('error' not in values for values in self.region_metrics.values()):
+            AuditWindow(self, "R² / r² calculation details", regional_metrics_audit(self.result, self.region_metrics), self.result)
         else:
             messagebox.showinfo(tr("Calculation details"), tr("Calculate valid results first."), parent=self)
 
@@ -221,7 +229,7 @@ class NMRLibraryWindow(tk.Toplevel):
         for label, command in (("Load into data list", self.load), ("Rename…", self.rename), ("Delete from library…", self.delete),
                                ("Move up", lambda: self.move(-1)), ("Move down", lambda: self.move(1))):
             ttk.Button(actions, text=tr(label), command=command).pack(side="left", padx=2)
-        self.tree = ttk.Treeview(self, columns=('name','source'), show='headings', selectmode='extended')
+        self.tree = ttk.Treeview(self, columns=('name','source'), show='headings', selectmode='extended', style=nmr_tree_style(self))
         self.tree.heading('name', text=tr('Series name')); self.tree.heading('source', text=tr('Source'))
         self.tree.column('name', width=300); self.tree.column('source', width=430)
         scroll = ttk.Scrollbar(self, command=self.tree.yview); scroll.pack(side='right', fill='y')
@@ -275,7 +283,7 @@ class SSNMRTab(ttk.Frame):
             row = ttk.Frame(controls); row.pack(fill='x', pady=3)
             for label, command in labels:
                 ttk.Button(row, text=tr(label), command=command).pack(side='left', fill='x', expand=True, padx=2)
-        self.tree = ttk.Treeview(controls, columns=('name',), show='headings', selectmode='extended')
+        self.tree = ttk.Treeview(controls, columns=('name',), show='headings', selectmode='extended', style=nmr_tree_style(self))
         self.tree.heading('name', text=tr('Loaded spectra')); self.tree.column('name', width=310)
         scroll = ttk.Scrollbar(controls, command=self.tree.yview); scroll.pack(side='right', fill='y')
         self.tree.configure(yscrollcommand=scroll.set); self.tree.pack(fill='both', expand=True, pady=5)
@@ -285,7 +293,6 @@ class SSNMRTab(ttk.Frame):
         ttk.Label(controls, textvariable=self.status, wraplength=320).pack(anchor='w', pady=7)
         self.plot = PlotPane(graph, self._draw, PlotOptions('Chemical shift', 'ppm', 'Intensity', 'a.u.', reverse_x=True), compact=True)
         self.plot.pack(fill='both', expand=True)
-        fit_plot_after_resize(self.plot)
 
     def add_dialog(self):
         paths = filedialog.askopenfilenames(parent=self, filetypes=[('TopSpin ASCII', '*.txt *.asc *.csv *.tsv')])
@@ -379,7 +386,7 @@ class SSNMRTab(ttk.Frame):
         selected = self.selected()
         if selected:
             spectrum = selected[0]
-            axis.plot(spectrum.x, spectrum.y, label=spectrum.name, color='#1769AA', linewidth=options.line_width)
+            axis.plot(spectrum.x, spectrum.y, label=spectrum.name, color=SERIES_PALETTE[0], linewidth=options.line_width)
         else:
             axis.text(0.5, 0.5, tr('Import TopSpin ASCII TXT data'), ha='center', transform=axis.transAxes)
 

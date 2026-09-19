@@ -8,7 +8,8 @@ import numpy as np
 from scipy.stats import pearsonr
 from labplotter.models import Spectrum
 from labplotter.nmr import (ComparisonSettings, ComparisonResult, parse_topspin_ascii, default_settings,
-    preprocess_pair, comparison_metrics, integral_ratios, region_integral, metrics_audit, integrals_audit, preprocessing_audit)
+    preprocess_pair, comparison_metrics, integral_ratios, region_integral, metrics_audit, integrals_audit, preprocessing_audit,
+    comparison_region_metrics, regional_metrics_audit)
 from labplotter.nmr_library import NMRLibrary, export_portable_library, import_portable_library
 from labplotter.parsers import detect_builtin_kind
 from labplotter.web import parse_uploaded_payload
@@ -37,6 +38,27 @@ class ASCIIImportTests(unittest.TestCase):
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_regional_statistics_use_changed_bounds_and_one_normalization(self):
+        x=np.arange(201.);a=x*x+1;b=a.copy();b[x<=50]*=2
+        result=ComparisonResult(('A','B'),x,a,b,ComparisonSettings(),{})
+        original_a,original_b=a.copy(),b.copy()
+        values=comparison_region_metrics(result,(0,200))
+        self.assertEqual(values['Aromatic region']['R2'],1)
+        self.assertLess(values['Aliphatic region']['R2'],1)
+        self.assertAlmostEqual(values['Aliphatic region']['r2'],1)
+        changed=comparison_region_metrics(result,(90,160),(10,30),(90,160))
+        m=changed['Aliphatic region'];mask=(x>=10)&(x<=30)
+        self.assertEqual(m['requested_range_ppm'],[10,30])
+        self.assertAlmostEqual(m['R2'],1-np.sum((a[mask]-b[mask])**2)/np.sum((a[mask]-a[mask].mean())**2))
+        self.assertNotEqual(m['R2'],values['Aliphatic region']['R2'])
+        self.assertAlmostEqual(m['r2'],pearsonr(a[mask],b[mask]).statistic**2)
+        np.testing.assert_array_equal(a,original_a);np.testing.assert_array_equal(b,original_b)
+        invalid=comparison_region_metrics(result,(0,200),(500,600))
+        self.assertIn('error',invalid['Aliphatic region']);self.assertNotIn('error',invalid['Aromatic region'])
+        audit=regional_metrics_audit(result,changed)
+        for text in ('Comparison range','Aliphatic region','Aromatic region','SSE','centered_cross','sqrt(SST_A*SS_B)'):
+            self.assertIn(text,audit)
+
     def options(self, **kwargs):
         return ComparisonSettings(baseline=False,align=False,gaussian_fwhm_ppm=0,normalization='None',**kwargs)
 

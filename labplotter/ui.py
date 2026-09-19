@@ -41,7 +41,8 @@ from .parsers import (
     workbook_signature,
 )
 from .plot_settings import AnnotationWindow, PlotSettingsWindow
-from .plotting import AnnotationSpec, PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text
+from .plotting import (AnnotationSpec, PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text,
+                       SERIES_PALETTE, save_plot_figure, validate_figure_ratio)
 from .processing import ftir_peak_indices, mean_curve, process_ftir
 from .storage import FormatProfileStore, ParticleLibrary, default_particle_label
 from .tem import (
@@ -85,16 +86,11 @@ BASELINE_HELP = {
 }
 
 
-SERIES_PALETTE = (
-    "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
-    "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
-)
-
 ZETA_COLOR_DEFAULTS = {
-    "dls_curve": {"scope": "individual", "global_color": "#1F77B4", "colors": {}},
-    "zeta_curve": {"scope": "individual", "global_color": "#1F77B4", "colors": {}},
-    "dls_bar": {"scope": "all", "global_color": "#4C78A8", "colors": {}},
-    "zeta_bar": {"scope": "all", "global_color": "#F58518", "colors": {}},
+    "dls_curve": {"scope": "individual", "global_color": SERIES_PALETTE[0], "colors": {}},
+    "zeta_curve": {"scope": "individual", "global_color": SERIES_PALETTE[0], "colors": {}},
+    "dls_bar": {"scope": "individual", "global_color": SERIES_PALETTE[0], "colors": {}},
+    "zeta_bar": {"scope": "individual", "global_color": SERIES_PALETTE[0], "colors": {}},
 }
 
 
@@ -243,7 +239,8 @@ class PlotPane(ttk.Frame):
         self._legend_drag_started = False
         self.figure = Figure(figsize=(8.5, 6.2), dpi=100)
         self.axis = self.figure.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self)
+        self.canvas_host = ttk.Frame(self)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.canvas_host)
         self.action_frame = ttk.Frame(self)
         actions = (
             ("Graph settings…", self.open_settings),
@@ -275,7 +272,12 @@ class PlotPane(ttk.Frame):
         self._pending_annotation = None
         self._drawing_start = None
         self._rebuild_toolbar()
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.canvas_host.pack(fill="both", expand=True)
+        self.canvas.get_tk_widget().place(x=0, y=0, relwidth=1, relheight=1)
+        self._layout_job = None
+        self.canvas_host.bind("<Configure>", self._resize_canvas)
+        self.canvas.get_tk_widget().bind("<Configure>", self._schedule_layout, add=True)
+        self.bind("<Destroy>", self._cancel_layout, add=True)
 
         self.vars = {
             "x_label": tk.StringVar(value=tr(options.x_label)),
@@ -305,6 +307,9 @@ class PlotPane(ttk.Frame):
             "reverse_x": tk.BooleanVar(value=options.reverse_x),
             "legend": tk.BooleanVar(value=options.legend),
             "background": tk.StringVar(value=options.background),
+            "fixed_ratio": tk.BooleanVar(value=options.figure_ratio is not None),
+            "ratio_width": tk.StringVar(value=str((options.figure_ratio or (8.5, 6.2))[0])),
+            "ratio_height": tk.StringVar(value=str((options.figure_ratio or (8.5, 6.2))[1])),
             "x_min": tk.StringVar(value="" if options.x_min is None else str(options.x_min)),
             "x_max": tk.StringVar(value="" if options.x_max is None else str(options.x_max)),
             "y_min": tk.StringVar(value="" if options.y_min is None else str(options.y_min)),
@@ -316,6 +321,50 @@ class PlotPane(ttk.Frame):
         self.canvas.mpl_connect("button_release_event", self._annotation_release)
         self.canvas.mpl_connect("button_press_event", self._legend_press)
         self.canvas.mpl_connect("button_release_event", self._legend_release)
+
+    def _resize_canvas(self, _event=None):
+        width, height = self.canvas_host.winfo_width(), self.canvas_host.winfo_height()
+        if width < 2 or height < 2:
+            return
+        ratio = self.options.figure_ratio
+        if ratio is not None:
+            scale = min(width / ratio[0], height / ratio[1])
+            w, h = max(1, round(ratio[0] * scale)), max(1, round(ratio[1] * scale))
+        else:
+            w, h = width, height
+        self.canvas.get_tk_widget().place(relwidth=0, relheight=0, x=(width-w)//2, y=(height-h)//2, width=w, height=h)
+        self._schedule_layout()
+
+    def _schedule_layout(self, _event=None):
+        if self._layout_job is not None:
+            self.after_cancel(self._layout_job)
+        self._layout_job = self.after(80, self._fit_figure)
+
+    def _fit_figure(self):
+        self._layout_job = None
+        widget = self.canvas.get_tk_widget()
+        # Tk's DPI change can otherwise leave the renderer larger than its image.
+        self.figure.set_size_inches(widget.winfo_width()/self.figure.dpi,
+                                    widget.winfo_height()/self.figure.dpi, forward=False)
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
+
+    def _cancel_layout(self, event):
+        if event.widget is self and self._layout_job is not None:
+            self.after_cancel(self._layout_job)
+            self._layout_job = None
+
+    def set_figure_ratio(self, ratio=None):
+        if ratio is not None:
+            width, height = validate_figure_ratio(*ratio)
+            self.vars['ratio_width'].set(f'{width:g}')
+            self.vars['ratio_height'].set(f'{height:g}')
+        else:
+            width, height = self.default_options.figure_ratio or (8.5, 6.2)
+            self.vars['ratio_width'].set(f'{width:g}')
+            self.vars['ratio_height'].set(f'{height:g}')
+        self.vars['fixed_ratio'].set(ratio is not None)
+        self.refresh()
 
     def _rebuild_toolbar(self):
         if self.toolbar is not None:
@@ -341,6 +390,13 @@ class PlotPane(ttk.Frame):
             "tick_color", "x_color", "y_color", "legend_color",
         ):
             setattr(self.options, key, self.vars[key].get())
+        if not self.vars["fixed_ratio"].get():
+            self.options.figure_ratio = None
+        else:
+            try:
+                self.options.figure_ratio = validate_figure_ratio(self.vars['ratio_width'].get(), self.vars['ratio_height'].get())
+            except ValueError:
+                pass  # Keep the last valid preview while a field is being typed.
         self.options.background = canonical(self.vars["background"].get())
         self.options.line_width = _float_or_none(self.vars["line_width"].get()) or 2.0
         self.options.tick_width = _float_or_none(self.vars["tick_width"].get()) or 1.5
@@ -361,6 +417,7 @@ class PlotPane(ttk.Frame):
         if self._legend_artist is not None:
             self._legend_artist.set_draggable(False)
         self.axis.clear()
+        self.axis.set_prop_cycle(color=SERIES_PALETTE)
         self._legend_artist = None
         self.overlay_artists = []
         try:
@@ -369,6 +426,7 @@ class PlotPane(ttk.Frame):
             self._create_legend()
             self.figure.tight_layout()
             self._render_annotations()
+            self._resize_canvas()
             self.canvas.draw_idle()
         except Exception as exc:
             messagebox.showerror(tr("Plot error"), str(exc), parent=self)
@@ -499,6 +557,9 @@ class PlotPane(ttk.Frame):
             "tick_length": str(self.options.tick_length), "spine_width": str(self.options.spine_width),
             "reverse_x": self.options.reverse_x, "legend": self.options.legend,
             "background": tr(self.options.background),
+            "fixed_ratio": self.options.figure_ratio is not None,
+            "ratio_width": str((self.options.figure_ratio or (8.5, 6.2))[0]),
+            "ratio_height": str((self.options.figure_ratio or (8.5, 6.2))[1]),
             "x_min": "" if self.options.x_min is None else str(self.options.x_min),
             "x_max": "" if self.options.x_max is None else str(self.options.x_max),
             "y_min": "" if self.options.y_min is None else str(self.options.y_min),
@@ -596,7 +657,7 @@ class PlotPane(ttk.Frame):
         path = filedialog.asksaveasfilename(parent=self, defaultextension=".png", filetypes=((tr("PNG image"), "*.png"), (tr("SVG vector"), "*.svg"), (tr("PDF vector"), "*.pdf")))
         if path:
             try:
-                self._with_annotation_visibility(include_annotations, lambda: self.figure.savefig(path, dpi=300, bbox_inches="tight"))
+                self._with_annotation_visibility(include_annotations, lambda: save_plot_figure(self.figure, path, dpi=300))
             except Exception as exc:
                 messagebox.showerror(tr("Save error"), str(exc), parent=self)
 
@@ -1757,7 +1818,7 @@ class SeriesColorSettingsExtension:
 
     def _choose_color(self, variable: tk.StringVar):
         parent = self._settings_window if self._settings_window and self._settings_window.winfo_exists() else None
-        selected = colorchooser.askcolor(color=variable.get() or "#1F77B4", parent=parent)[1]
+        selected = colorchooser.askcolor(color=variable.get() or SERIES_PALETTE[0], parent=parent)[1]
         if selected:
             variable.set(selected.upper())
         if parent is not None and parent.winfo_exists():

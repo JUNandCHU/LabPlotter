@@ -376,7 +376,7 @@ class ZetaDashboardTests(unittest.TestCase):
         self.assertEqual(resolve_series_color(all_series, "A", 0, "#123456"), "#ABCDEF")
         individual = {"scope": "individual", "global_color": "#ABCDEF", "colors": {"A": "#654321"}}
         self.assertEqual(resolve_series_color(individual, "A", 0, "#123456"), "#654321")
-        self.assertEqual(resolve_series_color(individual, "B", 1, "#123456"), "#FF7F0E")
+        self.assertEqual(resolve_series_color(individual, "B", 1, "#123456"), "#C00000")
 
     def test_color_live_preview_does_not_write_unchanged_traced_variable(self):
         class Variable:

@@ -1,4 +1,4 @@
-# LabPlotter 0.8.3
+# LabPlotter 0.8.4
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
@@ -24,6 +24,13 @@ FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고
 - 다른 프로그램이 클립보드를 잠근 경우 짧게 재시도하며 실패 시 안전하게 메모리 해제
 - 한글 축 제목이나 범례가 있으면 Windows의 `Malgun Gothic` 등 설치된 한글 지원 글꼴을 자동 선택
 - 상단 `Contact…`에서 관리자 이름과 이메일, 피드백 안내 확인 및 이메일 복사
+
+### 공통 그래프 비율과 기본 색상 (0.8.4)
+
+- `Graph settings… → Graph ratio`에서 가로:세로를 고정할 수 있습니다. `Square (1:1)`은 정사각형, `Restore default ratio`는 창 크기에 맞추는 기본 모드입니다. 다른 설정을 바꾸지 않고 비율만 복원할 수 있습니다.
+- 비율은 축 제목을 포함한 전체 그림에 적용되며, X/Y 데이터 단위나 축 범위를 바꾸지 않습니다. 미리보기·클립보드·PNG·SVG·PDF에 동일하게 적용하고 고정 비율에서는 자동 잘라내기로 비율이 바뀌지 않습니다. 가로/세로는 0.1~10 범위입니다.
+- 웹도 그래프 설정의 가로/세로·정사각형·기본 비율 복원을 지원하며 미리보기와 다운로드의 비율이 같습니다.
+- 기본 데이터 색상 순서는 RGB `(0,0,0)`, `(192,0,0)`, `(0,32,96)`, `(164,159,159)`, `(0,108,49)`, `(64,31,104)`, `(184,112,24)`입니다. 이후에는 추가 팔레트를 사용합니다. 사용자가 지정한 개별 색상도 지원합니다.
 
 ### FTIR
 
@@ -53,7 +60,7 @@ FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고
 
 NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorbance입니다. Absorbance는 엄밀히 무차원이므로 기본 Y축 단위는 비워 두었습니다. 필요하면 그래프 설정에서 `a.u.`를 입력할 수 있습니다.
 
-### Solid-state NMR (0.8.3)
+### Solid-state NMR (0.8.4)
 
 `Import ASCII TXT…`로 TopSpin의 **4열 ASCII**를 가져옵니다. **4열 ppm / 2열 intensity**를 사용하며 첫 줄의 1열에 제목이 있어도 측정점은 보존합니다. 이름은 파일명에서 확장자를 제외한 값이고 언제든 변경할 수 있습니다. ZIP/FID 가져오기는 제거했습니다.
 
@@ -61,7 +68,7 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 2. `Save to library`는 선택한 원본 데이터를 별도 `ssnmr_library.sqlite3`에 저장합니다. 이 파일은 앱 설치 폴더 밖의 사용자 데이터 폴더에 있어 업데이트 후에도 유지됩니다.
 3. `Open ssNMR library…`에서 저장 데이터를 재불러오기·이름 변경·삭제·순서 변경할 수 있습니다. 현재 목록에서 제거하는 동작과 라이브러리 삭제는 독립적입니다.
 4. `Compare two spectra…` → 기준 A와 비교 B 선택 → 전처리 설정 → `Process and compare`를 누르면 별도 비교 창이 열립니다.
-5. 비교 창의 ppm 범위와 적분 구간을 설정하고 `Calculate / update range`를 누릅니다. 결과는 **그래프 아래**에 표시됩니다. 두 검증 버튼은 계산 과정과 전처리 내역을 별도 창으로 엽니다.
+5. 비교 창의 ppm 범위와 적분 구간을 바꾸면 결과가 자동으로 갱신됩니다. `Calculate / update range`로 즉시 적용할 수도 있습니다. 전체 비교 구간·Aliphatic·Aromatic 각각의 R², r², r, N과 두 스펙트럼의 적분비가 **그래프 아래**에 표시됩니다. 두 검증 버튼은 세 구간의 계산 과정과 전처리 내역을 별도 창으로 엽니다.
 
 전처리 기본값:
 
@@ -73,6 +80,8 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 - 공통 측정 범위의 최대 절대 intensity로 각각 정규화합니다. 전체 절대 면적 정규화 또는 정규화 없음도 가능합니다. 비교 창에서 통계 범위만 바꾸면 전처리는 바뀌지 않습니다.
 
 계산 정의:
+
+- 세 통계 구간은 동일하게 전처리한 곡선을 사용하며 구간별로 다시 정규화하지 않습니다. Aliphatic/Aromatic 통계는 각각의 적분 경계값과 연동하고, 전체 비교 구간과 독립적으로 계산합니다. 실제 사용된 격자점과 ppm 범위는 검증 내역에 기록됩니다.
 
 - **R² (직접 일치도)** = `1 − Σ(A−B)² / Σ(A−mean(A))²`. A가 기준이며 회귀로 B의 크기나 오프셋을 다시 맞추지 않습니다. 음수가 될 수 있습니다.
 - **r²** = Pearson r의 제곱. r도 같이 표시하므로 양/음의 상관을 구별할 수 있습니다. 상수 스펙트럼은 정의되지 않는 값을 `Undefined`로 표시합니다.

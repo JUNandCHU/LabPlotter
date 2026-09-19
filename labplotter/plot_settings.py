@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import colorchooser, font as tkfont, ttk
+from tkinter import colorchooser, font as tkfont, messagebox, ttk
 
 from .i18n import canonical, localize_widget_tree, manager as language_manager, tr
+from .plotting import validate_figure_ratio
 
 
 FONT_FAMILIES = (
@@ -71,10 +72,13 @@ class PlotSettingsWindow(tk.Toplevel):
         notebook.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         axes = ttk.Frame(notebook, padding=10)
         fonts = ttk.Frame(notebook, padding=10)
+        ratio = ttk.Frame(notebook, padding=10)
         notebook.add(axes, text=tr("Axes and lines"))
         notebook.add(fonts, text=tr("Fonts and colors"))
+        notebook.add(ratio, text=tr("Graph ratio"))
         self._build_axes(axes)
         self._build_fonts(fonts)
+        self._build_ratio(ratio)
         self.extension = getattr(self.pane, "settings_extension", None)
         if self.extension is not None:
             extra = ScrollableSettingsFrame(notebook)
@@ -130,6 +134,16 @@ class PlotSettingsWindow(tk.Toplevel):
         ttk.Checkbutton(appearance, text="Legend", variable=self.pane.vars["legend"]).grid(row=2, column=3, sticky="w")
         appearance.columnconfigure(1, weight=1)
         appearance.columnconfigure(3, weight=1)
+
+    def _build_ratio(self, parent):
+        ttk.Checkbutton(parent, text="Fix graph width : height", variable=self.pane.vars['fixed_ratio']).grid(row=0, column=0, columnspan=4, sticky='w', pady=8)
+        self._entry(parent, "Width", self.pane.vars['ratio_width'], 1, 0)
+        self._entry(parent, "Height", self.pane.vars['ratio_height'], 1, 2)
+        ttk.Button(parent, text="Square (1:1)", command=lambda: self.pane.set_figure_ratio((1,1))).grid(row=2, column=0, columnspan=2, sticky='ew', pady=12, padx=4)
+        ttk.Button(parent, text="Restore default ratio", command=lambda: self.pane.set_figure_ratio()).grid(row=2, column=2, columnspan=2, sticky='ew', pady=12, padx=4)
+        ttk.Label(parent, text="The ratio includes axis labels and applies to preview, clipboard, PNG, SVG and PDF. The default fits the available window. Width/height: 0.1–10.", wraplength=620).grid(row=3, column=0, columnspan=4, sticky='w', pady=8)
+        parent.columnconfigure(1, weight=1)
+        parent.columnconfigure(3, weight=1)
 
     def _color_control(self, parent, label: str, key: str, row: int):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="e", padx=(4, 3), pady=3)
@@ -258,6 +272,12 @@ class PlotSettingsWindow(tk.Toplevel):
             self._extension_applying = False
 
     def apply(self):
+        if self.pane.vars['fixed_ratio'].get():
+            try:
+                validate_figure_ratio(self.pane.vars['ratio_width'].get(), self.pane.vars['ratio_height'].get())
+            except ValueError:
+                messagebox.showerror(tr('Graph ratio'), tr('Graph width and height must be positive; width/height must be between 0.1 and 10.'), parent=self)
+                return
         if self._extension_job is not None:
             try:
                 self.after_cancel(self._extension_job)

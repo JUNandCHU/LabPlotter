@@ -272,6 +272,25 @@ def region_integral(x, y, low: float, high: float) -> dict:
             "absolute_area": float(trapezoid(np.abs(yy), xx))}
 
 
+def comparison_region_metrics(result: ComparisonResult, comparison, aliphatic=(0., 50.), aromatic=(90., 160.)) -> dict:
+    """Evaluate all three ranges on the same processed curves, without renormalizing."""
+    output = {}
+    for name, bounds in (("Comparison range", comparison), ("Aliphatic region", aliphatic), ("Aromatic region", aromatic)):
+        try:
+            output[name] = comparison_metrics(result, *bounds)
+        except (ValueError, TypeError) as exc:
+            output[name] = {"error": str(exc), "requested_range_ppm": list(bounds)}
+    return output
+
+
+def regional_metrics_audit(result: ComparisonResult, regions: dict) -> str:
+    sections = ["All regions use the same processed spectra. No region-specific renormalization.\n"
+                "Pearson r = sum((A-mean_A)*(B-mean_B)) / sqrt(SST_A*SS_B); r² = r*r.\n"]
+    for name, values in regions.items():
+        sections.append(name + "\n" + (json.dumps(values, indent=2) if "error" in values else metrics_audit(result, values)))
+    return "\n\n".join(sections)
+
+
 def integral_ratios(result: ComparisonResult, aliphatic=(0.0, 50.0), aromatic=(90.0, 160.0)) -> list[dict]:
     output = []
     for name, y in zip(result.names, (result.a, result.b)):

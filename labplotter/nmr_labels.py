@@ -1,5 +1,9 @@
 """Shared Korean labels for the desktop and web ssNMR workspace."""
 KO = {
+    'Comparison range': '전체 비교 구간',
+    'Aliphatic region': 'Aliphatic 구간',
+    'Aromatic region': 'Aromatic 구간',
+    'Updating results…': '결과 갱신 중…',
     'Import ASCII TXT…': 'ASCII TXT 가져오기…',
     'Import selected files': '선택 파일 가져오기',
     'Import TopSpin ASCII TXT data': 'TopSpin ASCII TXT 데이터를 가져오세요',

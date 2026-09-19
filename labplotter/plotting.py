@@ -9,6 +9,30 @@ from uuid import uuid4
 from matplotlib.figure import Figure
 from matplotlib import font_manager
 from matplotlib.ticker import MultipleLocator
+from matplotlib.transforms import Bbox
+import math
+
+
+# Shared by desktop curves, bars, TEM distributions, and the web edition.
+SERIES_PALETTE = (
+    "#000000", "#C00000", "#002060", "#A49F9F", "#006C31", "#401F68", "#B87018",
+    "#17BECF", "#E377C2", "#8C564B", "#BCBD22", "#1F77B4", "#FF7F0E", "#2CA02C",
+)
+
+
+def validate_figure_ratio(width, height) -> tuple[float, float]:
+    width, height = float(width), float(height)
+    if not all(math.isfinite(v) and v > 0 for v in (width, height)) or not 0.1 <= width / height <= 10:
+        raise ValueError("Graph width and height must be positive; width/height must be between 0.1 and 10.")
+    return width, height
+
+
+def figure_size_for_ratio(size, ratio):
+    if ratio is None:
+        return tuple(size)
+    width, height = validate_figure_ratio(*ratio)
+    scale = max(size) / max(width, height)
+    return width * scale, height * scale
 
 
 @dataclass
@@ -49,6 +73,8 @@ class PlotOptions:
     y_max: float | None = None
     x_tick: float | None = None
     y_tick: float | None = None
+    # Whole figure (including labels), not the numerical X/Y axis scale.
+    figure_ratio: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         self.tick_font_family = self.tick_font_family or self.font_family
@@ -110,6 +136,9 @@ def font_family_for_text(requested: str, text: str) -> str:
 
 
 def apply_origin_style(figure: Figure, axis, options: PlotOptions) -> None:
+    figure._labplotter_ratio = options.figure_ratio
+    if options.figure_ratio is not None:
+        figure.set_size_inches(*figure_size_for_ratio(figure.get_size_inches(), options.figure_ratio), forward=False)
     dark = options.background == "Dark"
     face = "#333333" if dark else "white"
     ink = "#E8E8E8" if dark else "black"
@@ -169,7 +198,31 @@ def apply_origin_style(figure: Figure, axis, options: PlotOptions) -> None:
             axis.set_xlim(right, left)
 
 
+def figure_export_bbox(figure: Figure):
+    # Tight cropping would silently change a requested square/rectangular ratio.
+    if getattr(figure, "_labplotter_ratio", None) is not None:
+        return Bbox.from_bounds(0, 0, *figure.get_size_inches())
+    return "tight"
+
+
+def save_plot_figure(figure: Figure, destination, **kwargs) -> None:
+    size = figure.get_size_inches().copy()
+    positions = [(axis, axis.get_position().frozen(), axis.get_in_layout()) for axis in figure.axes]
+    try:
+        ratio = getattr(figure, "_labplotter_ratio", None)
+        if ratio is not None:
+            figure.set_size_inches(*figure_size_for_ratio(size, ratio), forward=False)
+            if figure.get_layout_engine() is None:
+                figure.tight_layout()
+        figure.savefig(destination, bbox_inches=figure_export_bbox(figure), **kwargs)
+    finally:
+        figure.set_size_inches(size, forward=False)
+        for axis, position, in_layout in positions:
+            axis.set_position(position)
+            axis.set_in_layout(in_layout)
+
+
 def figure_png_bytes(figure: Figure, dpi: int = 300, transparent: bool = False) -> bytes:
     buffer = BytesIO()
-    figure.savefig(buffer, format="png", dpi=dpi, bbox_inches="tight", transparent=transparent)
+    save_plot_figure(figure, buffer, format="png", dpi=dpi, transparent=transparent)
     return buffer.getvalue()

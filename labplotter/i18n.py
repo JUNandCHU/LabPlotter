@@ -567,6 +567,8 @@ KO = {
 
 from .nmr_labels import KO as NMR_KO
 KO.update(NMR_KO)
+from .plot_labels import KO as PLOT_KO
+KO.update(PLOT_KO)
 
 def _translated(source: str, language: str) -> str:
     return KO.get(source, source) if language == "ko" else source

@@ -16,7 +16,7 @@ import streamlit as st
 
 from labplotter import __version__
 from labplotter.models import Spectrum, ZetaMeasurement
-from labplotter.plotting import PlotOptions, figure_png_bytes
+from labplotter.plotting import PlotOptions, figure_png_bytes, SERIES_PALETTE, validate_figure_ratio
 from labplotter.tem import TEMAnalysisParameters, TEMImageAnalysis
 from labplotter.web import (
     figure_svg_bytes,
@@ -126,6 +126,8 @@ KO = {
 
 from labplotter.nmr_labels import KO as NMR_KO
 KO.update(NMR_KO)
+from labplotter.plot_labels import KO as PLOT_KO
+KO.update(PLOT_KO)
 
 def t(text: str) -> str:
     return KO.get(text, text) if st.session_state.get("language", "English") == "한국어" else text
@@ -198,7 +200,7 @@ def _spectrum_selector(spectra: list[Spectrum], prefix: str) -> list[Spectrum]:
 
 
 def _series_colors(items: list[tuple[str, str]], prefix: str) -> dict[str, str]:
-    defaults = ("#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD", "#8C564B", "#E377C2", "#7F7F7F")
+    defaults = SERIES_PALETTE
     result: dict[str, str] = {}
     with st.expander(t("Series colors"), expanded=False):
         columns = st.columns(2)
@@ -208,8 +210,29 @@ def _series_colors(items: list[tuple[str, str]], prefix: str) -> dict[str, str]:
     return result
 
 
+def _ratio_controls(prefix: str):
+    def reset(square=False):
+        st.session_state[prefix+'-fixed-ratio'] = square
+        st.session_state[prefix+'-ratio-width'] = 1.0 if square else 8.5
+        st.session_state[prefix+'-ratio-height'] = 1.0 if square else 6.2
+    fixed = st.checkbox(t('Fix graph width : height'), key=prefix+'-fixed-ratio')
+    cols = st.columns(2)
+    width = cols[0].number_input(t('Width'), min_value=0.1, max_value=100.0, value=8.5, step=0.1, key=prefix+'-ratio-width')
+    height = cols[1].number_input(t('Height'), min_value=0.1, max_value=100.0, value=6.2, step=0.1, key=prefix+'-ratio-height')
+    cols[0].button(t('Square (1:1)'), key=prefix+'-square', on_click=reset, args=(True,))
+    cols[1].button(t('Restore default ratio'), key=prefix+'-ratio-reset', on_click=reset)
+    st.caption(t('The ratio includes axis labels and is preserved in preview and image downloads.'))
+    if fixed:
+        try:
+            return validate_figure_ratio(width, height)
+        except ValueError:
+            st.error(t('Graph width and height must be positive; width/height must be between 0.1 and 10.'))
+    return None
+
+
 def _plot_options(prefix: str, defaults: dict[str, Any]) -> PlotOptions:
     with st.expander(t("Plot settings"), expanded=False):
+        ratio = _ratio_controls(prefix)
         first = st.columns(4)
         x_label = first[0].text_input(t("X-axis name"), defaults.get("x_label", "X"), key=f"{prefix}-xlabel")
         x_unit = first[1].text_input(t("X-axis unit"), defaults.get("x_unit", ""), key=f"{prefix}-xunit")
@@ -241,13 +264,13 @@ def _plot_options(prefix: str, defaults: dict[str, Any]) -> PlotOptions:
         font_size=font_size, line_width=line_width, spine_width=spine_width,
         tick_width=tick_width, tick_length=tick_length, reverse_x=reverse_x,
         legend=legend, background="Dark" if dark else "White", x_min=x_min,
-        x_max=x_max, y_min=y_min, y_max=y_max, x_tick=x_tick, y_tick=y_tick,
+        x_max=x_max, y_min=y_min, y_max=y_max, x_tick=x_tick, y_tick=y_tick, figure_ratio=ratio,
     )
 
 
 def _show_figure(figure, prefix: str) -> None:
-    st.pyplot(figure, width="stretch")
     png = figure_png_bytes(figure)
+    st.image(png, width="stretch")
     svg = figure_svg_bytes(figure)
     buttons = st.columns(2)
     buttons[0].download_button(t("Download PNG"), png, f"LabPlotter_{prefix}.png", "image/png", key=f"{prefix}-png")
@@ -314,7 +337,7 @@ def nanodrop_page() -> None:
 
 def nmr_page() -> None:
     from web.nmr_page import render_nmr_page
-    render_nmr_page(t, _show_figure)
+    render_nmr_page(t, _show_figure, _ratio_controls)
 
 
 def zeta_page() -> None:
@@ -423,7 +446,8 @@ def tem_page() -> None:
     st.subheader(t("Batch summary"))
     st.dataframe(summaries, width="stretch")
     st.subheader(t("Particle-size distributions"))
-    _show_figure(tem_distribution_figure(analyses), "TEM_distribution")
+    options = _plot_options("tem-distribution", {"x_label": "Particle diameter", "x_unit": "nm", "y_label": "Density", "y_unit": ""})
+    _show_figure(tem_distribution_figure(analyses, options), "TEM_distribution")
     st.download_button(t("Download particle CSV"), _tem_csv(analyses), "LabPlotter_TEM_particles.csv", "text/csv")
 
 

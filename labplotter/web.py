@@ -6,7 +6,6 @@ from pathlib import Path
 import tempfile
 from typing import Any, Iterable
 
-from matplotlib import colormaps
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle
 import numpy as np
@@ -20,7 +19,8 @@ from .parsers import (
     parse_nanodrop_file,
     parse_zetasizer_workbook,
 )
-from .plotting import PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text
+from .plotting import (PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text,
+                       SERIES_PALETTE, save_plot_figure)
 from .processing import ftir_peak_indices, mean_curve, normalize, process_ftir
 from .tem import TEMAnalysisParameters, TEMImageAnalysis, analyze_tem_image
 
@@ -112,8 +112,7 @@ def processed_ftir_spectra(spectra: Iterable[Spectrum], **options: Any) -> list[
 
 
 def _default_colors(count: int) -> list[str]:
-    cmap = colormaps["tab20"]
-    return [cmap(index % 20) for index in range(max(1, count))]
+    return [SERIES_PALETTE[index % len(SERIES_PALETTE)] for index in range(max(1, count))]
 
 
 def _style_legend(axis, options: PlotOptions) -> None:
@@ -273,7 +272,7 @@ def tem_overlay_figure(payload: bytes, analysis: TEMImageAnalysis) -> Figure:
     return figure
 
 
-def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis]) -> Figure:
+def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis], options: PlotOptions | None = None) -> Figure:
     grouped: dict[str, list[float]] = {}
     for analysis in analyses:
         if analysis.included and analysis.status == "analyzed":
@@ -287,7 +286,7 @@ def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis]) -> Figure:
             continue
         bins = min(40, max(8, int(np.sqrt(data.size) * 2)))
         axis.hist(data, bins=bins, density=True, histtype="step", linewidth=2.0, color=colors[index], label=f"{batch} (n={len(data)})")
-    options = PlotOptions("Particle diameter", "nm", "Density", "", font_family="DejaVu Sans", reverse_x=False)
+    options = options or PlotOptions("Particle diameter", "nm", "Density", "", font_family="DejaVu Sans", reverse_x=False)
     apply_origin_style(figure, axis, options)
     _style_legend(axis, options)
     return figure
@@ -295,7 +294,7 @@ def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis]) -> Figure:
 
 def figure_svg_bytes(figure: Figure) -> bytes:
     buffer = BytesIO()
-    figure.savefig(buffer, format="svg", bbox_inches="tight")
+    save_plot_figure(figure, buffer, format="svg")
     return buffer.getvalue()
 
 

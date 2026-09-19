@@ -5,7 +5,7 @@ import numpy as np
 import streamlit as st
 from labplotter.models import Spectrum
 from labplotter.nmr import (PHASE_NOTE, ComparisonSettings, default_settings, preprocess_pair,
-    comparison_metrics, integral_ratios, metrics_audit, integrals_audit, preprocessing_audit, comparison_csv)
+    comparison_region_metrics, integral_ratios, regional_metrics_audit, integrals_audit, preprocessing_audit, comparison_csv)
 from labplotter.nmr_library import export_portable_library, import_portable_library
 from labplotter.plotting import PlotOptions
 from labplotter.web import parse_uploaded_payload, spectra_figure
@@ -109,7 +109,7 @@ def preprocessing_dialog(t):
             st.error(str(exc))
 
 
-def comparison_panel(t, show_figure):
+def comparison_panel(t, show_figure, ratio_controls=None):
     r=st.session_state.get('_nmr_result')
     if r is None:
         return
@@ -123,26 +123,33 @@ def comparison_panel(t, show_figure):
     high=cols[1].number_input(t('Comparison max')+' (ppm)',value=float(r.x[-1]),key='nmr-compare-high-'+key)
     if low>=high:
         st.error(t('Comparison minimum must be less than maximum.')); return
-    options=PlotOptions('Chemical shift','ppm','Intensity','a.u.' if r.settings.normalization=='None' else 'normalized a.u.',reverse_x=True,x_min=low,x_max=high)
+    ratio = None
+    if ratio_controls is not None:
+        with st.expander(t('Plot settings')):
+            ratio = ratio_controls('nmr-comparison')
+    options=PlotOptions('Chemical shift','ppm','Intensity','a.u.' if r.settings.normalization=='None' else 'normalized a.u.',reverse_x=True,x_min=low,x_max=high,figure_ratio=ratio)
     show_figure(spectra_figure([Spectrum(r.names[0],r.x,r.a),Spectrum(r.names[1],r.x,r.b)], options), 'ssNMR_comparison')
     # Result elements follow the figure in the page layout; never annotate axes.
     st.markdown('**'+t('Comparison results')+'**')
-    try:
-        m=comparison_metrics(r,low,high)
-        cols=st.columns(4)
-        for col,label,value in zip(cols,('R²','r²','r','N'),(_fmt(m['R2']),_fmt(m['r2']),_fmt(m['r']),str(m['n']))):
-            col.metric(label,value)
-        st.caption(f"{t('Used ppm')}: {m['used_range_ppm'][0]:.7g} … {m['used_range_ppm'][1]:.7g}")
-        if st.button(t('R² / r² calculation details…'), key='nmr-metric-audit'):
-            st.session_state['_nmr_audit_text'] = metrics_audit(r,m)
-            st.session_state['_nmr_dialog'] = 'audit'
-    except ValueError as exc:
-        st.error(str(exc))
     cols=st.columns(4)
     alow=cols[0].number_input(t('Aliphatic min'),value=0.0,key='nmr-int-a-low')
     ahigh=cols[1].number_input(t('Aliphatic max'),value=50.0,key='nmr-int-a-high')
     rlow=cols[2].number_input(t('Aromatic min'),value=90.0,key='nmr-int-r-low')
     rhigh=cols[3].number_input(t('Aromatic max'),value=160.0,key='nmr-int-r-high')
+    regions=comparison_region_metrics(r,(low,high),(alow,ahigh),(rlow,rhigh))
+    st.session_state['_nmr_region_metrics'] = regions
+    for label,m in regions.items():
+        st.markdown('**'+t(label)+'**')
+        if 'error' in m:
+            st.error(m['error'])
+            continue
+        cols=st.columns(4)
+        for col,name,value in zip(cols,('R²','r²','r','N'),(_fmt(m['R2']),_fmt(m['r2']),_fmt(m['r']),str(m['n']))):
+            col.metric(name,value)
+        st.caption(f"{t('Used ppm')}: {m['used_range_ppm'][0]:.7g} … {m['used_range_ppm'][1]:.7g}")
+    if st.button(t('R² / r² calculation details…'), key='nmr-metric-audit'):
+        st.session_state['_nmr_audit_text'] = regional_metrics_audit(r,regions)
+        st.session_state['_nmr_dialog'] = 'audit'
     try:
         ratios=integral_ratios(r,(alow,ahigh),(rlow,rhigh))
         st.dataframe([{'Spectrum':v['name'],f'I({alow:g}–{ahigh:g} ppm)':v['aliphatic']['area'],f'I({rlow:g}–{rhigh:g} ppm)':v['aromatic']['area'], 'Aliphatic / aromatic':v['ratio']} for v in ratios],hide_index=True)
@@ -156,7 +163,7 @@ def comparison_panel(t, show_figure):
     st.download_button(t('Preprocessing audit'),preprocessing_audit(r),'ssNMR_preprocessing.txt','text/plain',key='nmr-preprocess-audit')
 
 
-def render_nmr_page(t, show_figure):
+def render_nmr_page(t, show_figure, ratio_controls=None):
     spectra=st.session_state.setdefault('_nmr_spectra',[])
     library=st.session_state.setdefault('_nmr_library',[])
     left,right=st.columns([1,3])
@@ -190,10 +197,14 @@ def render_nmr_page(t, show_figure):
                 st.success(t('Saved to library.'))
     with right:
         if uid:
-            show_figure(spectra_figure([next(s for s in spectra if s.uid==uid)],PlotOptions('Chemical shift','ppm','Intensity','a.u.',reverse_x=True)), 'ssNMR_raw')
+            ratio = None
+            if ratio_controls is not None:
+                with st.expander(t('Plot settings')):
+                    ratio = ratio_controls('nmr-raw')
+            show_figure(spectra_figure([next(s for s in spectra if s.uid==uid)],PlotOptions('Chemical shift','ppm','Intensity','a.u.',reverse_x=True,figure_ratio=ratio)), 'ssNMR_raw')
         else:
             st.info(t('Import TopSpin ASCII TXT data'))
-    comparison_panel(t,show_figure)
+    comparison_panel(t,show_figure,ratio_controls)
     modal = st.session_state.get('_nmr_dialog')
     if modal == 'library':
         library_dialog(t)

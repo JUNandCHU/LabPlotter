@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.4 — 2026-09-19
+
+- Fixed clipped ssNMR list/library text by sizing rows from the actual UI font.
+- Added separately audited R², Pearson r/r² and point counts for the comparison, aliphatic and aromatic regions; changing bounds automatically updates statistics and ratios.
+- Added common graph width:height controls, a square preset and default-ratio restoration. Desktop preview/clipboard/PNG/SVG/PDF and web preview/downloads preserve the selected full-figure ratio.
+- Applied the requested seven-color RGB order across desktop and web curves, bars and TEM distributions; explicit per-series colors remain supported.
+
 ## 0.8.3 — 2026-09-19
 
 - Replaced Bruker ZIP/FID ssNMR import with four-column TopSpin ASCII (ppm column 4, intensity column 2), preserving title-bearing first data rows.

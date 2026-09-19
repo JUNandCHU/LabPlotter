@@ -13,7 +13,7 @@ def main() -> None:
     if app.exception:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     titles = [item.value for item in app.title]
-    if titles != ["LabPlotter Web 0.8.3"]:
+    if titles != ["LabPlotter Web 0.8.4"]:
         raise RuntimeError(f"Unexpected title: {titles}")
     labels = [item.label for item in app.tabs]
     expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "TEM", "Custom format"]
@@ -35,10 +35,21 @@ def main() -> None:
     process.click().run()
     if app.exception:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
-    if len(app.metric) != 4 or app.session_state["_nmr_result"].names != ("A", "B"):
+    if len(app.metric) != 12 or app.session_state["_nmr_result"].names != ("A", "B"):
         raise RuntimeError("ssNMR comparison controls did not produce metrics")
+    before = app.session_state['_nmr_region_metrics']['Aliphatic region']['R2']
+    app.number_input(key='nmr-int-a-high').set_value(30.0).run()
+    regional = app.session_state['_nmr_region_metrics']['Aliphatic region']
+    if regional['requested_range_ppm'] != [0,30] or regional['R2'] == before:
+        raise RuntimeError('Regional metric bounds did not update')
+    app.button(key='nmr-comparison-square').click().run()
+    if app.exception or not app.session_state['nmr-comparison-fixed-ratio']:
+        raise RuntimeError('Square graph control failed')
+    app.button(key='nmr-comparison-ratio-reset').click().run()
+    if app.session_state['nmr-comparison-fixed-ratio']:
+        raise RuntimeError('Graph ratio reset failed')
     app.button(key="nmr-metric-audit").click().run()
-    if app.exception or not any("SSE" in item.value for item in app.text_area):
+    if app.exception or not any("SSE" in item.value and "Aliphatic region" in item.value and "Aromatic region" in item.value for item in app.text_area):
         raise RuntimeError("ssNMR calculation audit did not open")
     # Start a separate Korean session to catch translated-widget regressions.
     korean = AppTest.from_file(str(app_path), default_timeout=30)
