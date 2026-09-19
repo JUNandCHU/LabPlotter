@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import re
 import xml.etree.ElementTree as ET
-import zipfile
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -245,16 +244,19 @@ def detect_builtin_kind(path: str | Path) -> str | None:
     suffix = path.suffix.lower()
     if suffix in {".tif", ".tiff"}:
         return "TEM"
-    if suffix == ".zip":
+    if suffix in {".csv", ".tsv", ".txt", ".asc"}:
+        # A TopSpin table has sequential index rows and a linear Hz/ppm axis.
+        # Probe with the real parser; ordinary two-column FTIR remains unchanged.
+        from .nmr import parse_topspin_ascii
         try:
-            with zipfile.ZipFile(path) as archive:
-                names = archive.namelist()
-            if any(name.endswith("/acqus") for name in names) and any(name.endswith(("/fid", "/ser")) for name in names):
+            spectrum = parse_topspin_ascii(path)
+            rows = _delimited_rows(path)
+            numbered = [row for row in rows[:30] if len(row) == 4 and str(row[0]).strip().isdigit()]
+            if len(numbered) >= 2 and spectrum.metadata["frequency_mhz_from_axes"] > 0:
                 return "ssNMR"
-        except (OSError, zipfile.BadZipFile):
-            return None
-    if suffix in {".csv", ".tsv", ".txt"}:
-        return "FTIR"
+        except (ValueError, OSError):
+            pass
+        return "FTIR" if suffix != ".asc" else None
     if suffix == ".xml":
         preview = workbook_preview(path, limit_rows=2, limit_cols=4)
         row = next(iter(preview.values()), [[]])[0]

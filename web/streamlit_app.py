@@ -23,7 +23,6 @@ from labplotter.web import (
     parse_generic_payload,
     parse_uploaded_payload,
     processed_ftir_spectra,
-    processed_nmr_spectrum,
     spectra_figure,
     tem_distribution_figure,
     tem_overlay_figure,
@@ -121,9 +120,12 @@ KO = {
     "Processing uploaded files…": "업로드 파일 처리 중…",
     "File error": "파일 오류",
     "Web limitations": "웹 버전 제한",
-    "Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only in 0.8.1.": "지속형 로컬 라이브러리, Windows 클립보드 내보내기, OCR 결과 직접 수정 및 .labpatch 업데이트는 0.8.1에서 데스크톱 전용입니다.",
+    "Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only.": "지속형 로컬 라이브러리, Windows 클립보드 내보내기, OCR 결과 직접 수정 및 .labpatch 업데이트는 0.8.1에서 데스크톱 전용입니다.",
 }
 
+
+from labplotter.nmr_labels import KO as NMR_KO
+KO.update(NMR_KO)
 
 def t(text: str) -> str:
     return KO.get(text, text) if st.session_state.get("language", "English") == "한국어" else text
@@ -161,16 +163,6 @@ def _generic_cached(filename: str, payload: bytes, profile_items: tuple[tuple[st
         cache.clear()
     cache[key] = result
     return result
-
-
-def _process_nmr_cached(spectrum: Spectrum, **options: Any) -> Spectrum:
-    cache = st.session_state.setdefault("_processed_nmr", {})
-    key = (spectrum.uid, tuple(sorted(options.items())))
-    if key not in cache:
-        if len(cache) >= 64:
-            cache.clear()
-        cache[key] = processed_nmr_spectrum(spectrum, **options)
-    return cache[key]
 
 
 def _parse_many(uploaded_files, kind: str, tem_values: tuple[Any, ...] | None = None):
@@ -321,34 +313,8 @@ def nanodrop_page() -> None:
 
 
 def nmr_page() -> None:
-    uploaded = st.file_uploader(t("Files"), type=["zip"], accept_multiple_files=True, key="nmr-files")
-    results, errors = _parse_many(uploaded, "ssNMR")
-    _errors(errors)
-    spectra = [spectrum for result in results for spectrum in (result.spectra or [])]
-    skipped = [message for result in results for message in (result.skipped or [])]
-    if skipped:
-        with st.expander(t("Skipped experiments")):
-            st.write("\n".join(f"- {message}" for message in skipped))
-    if not spectra:
-        st.info(t("No usable data were found in the uploaded files."))
-        return
-    spectra = _spectrum_selector(spectra, "nmr")
-    with st.expander(t("NMR processing"), expanded=True):
-        columns = st.columns(3)
-        phase_mode = columns[0].selectbox(t("Phase mode"), ["Automatic phase", "Saved TopSpin phase", "Magnitude (phase independent)", "No phase correction"], key="nmr-phase")
-        line_broadening = columns[1].number_input(t("Extra line broadening (Hz)"), 0.0, 1000.0, 0.0, 1.0, key="nmr-lb")
-        baseline = columns[2].checkbox(t("Linear baseline"), False, key="nmr-baseline")
-        columns = st.columns(3)
-        phase0 = columns[0].number_input(t("Zero-order phase (°)"), -360.0, 360.0, 0.0, 1.0, key="nmr-p0")
-        phase1 = columns[1].number_input(t("First-order phase (°)"), -720.0, 720.0, 0.0, 1.0, key="nmr-p1")
-        normalize_values = columns[2].checkbox(t("Normalize maximum"), True, key="nmr-normalize")
-    processed = [_process_nmr_cached(
-        item, phase_mode=phase_mode, extra_line_broadening=line_broadening,
-        phase0=phase0, phase1=phase1, baseline=baseline, normalize_values=normalize_values,
-    ) for item in spectra]
-    colors = _series_colors([(item.uid, item.name) for item in processed if item.visible], "nmr")
-    options = _plot_options("nmr", {"x_label": "Chemical shift", "x_unit": "ppm", "y_label": "Intensity", "y_unit": "a.u.", "reverse_x": True})
-    _show_figure(spectra_figure(processed, options, colors=colors), "ssNMR")
+    from web.nmr_page import render_nmr_page
+    render_nmr_page(t, _show_figure)
 
 
 def zeta_page() -> None:
@@ -507,7 +473,7 @@ def main() -> None:
     with st.expander(t("About"), expanded=False):
         st.write(t("The web edition reuses the same parsing, processing, NMR, ZetaSizer, and TEM analysis core as the Windows edition."))
         st.info(t("Uploaded files are processed only for this browser session. Download your results before closing the page."))
-        st.warning(t("Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only in 0.8.1."))
+        st.warning(t("Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only."))
         st.markdown(f"**{t('Contact and feedback')}**  \n{t('Jun Min Moon · moonkeving@gmail.com')}")
     tabs = st.tabs(["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "TEM", t("Custom format")])
     pages = (ftir_page, nanodrop_page, nmr_page, zeta_page, tem_page, custom_page)

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.3 — 2026-09-19
+
+- Replaced Bruker ZIP/FID ssNMR import with four-column TopSpin ASCII (ppm column 4, intensity column 2), preserving title-bearing first data rows.
+- Added a desktop raw-spectrum list, rename/remove actions, and independent persistent ssNMR library with reload/rename/delete/reorder.
+- Added shared-grid paired comparison with native edge-baseline correction, bounded rigid chemical-shift alignment, shared Gaussian broadening and normalization. Real-only exported phase is preserved and explicitly reported.
+- Added direct R², Pearson r/r² and configurable aliphatic/aromatic signed integral ratios below the overlay.
+- Added complete per-point preprocessing/statistics and per-segment integration audit windows, TXT exports and comparison CSV.
+- Added the same processing and metrics to the web edition with a portable JSON session library and Korean/English labels.
+
 ## 0.8.2 — 2026-08-10
 
 - Made the desktop ZetaSizer DLS and zeta distribution legends directly draggable.

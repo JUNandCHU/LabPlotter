@@ -29,7 +29,7 @@ from .clipboard import copy_png_to_clipboard
 from .config import SettingsStore
 from .i18n import canonical, language, localize_widget_tree, manager as language_manager, set_language, tr, translate_value
 from .models import Spectrum
-from .nmr import parse_bruker_zip, process_bruker_1d
+from .nmr_ui import SSNMRTab
 from .ocr import OCRTable, run_table_ocr
 from .parsers import (
     detect_builtin_kind,
@@ -873,163 +873,6 @@ class NanoDropTab(ttk.Frame):
             axis.plot(spectrum.x, spectrum.y, label=spectrum.name, linewidth=options.line_width, **kwargs)
         if not self.tree.visible():
             axis.text(0.5, 0.5, tr("Add a NanoDrop XML/XLSX export"), ha="center", va="center", transform=axis.transAxes)
-
-    def _refresh(self):
-        if hasattr(self, "plot"):
-            self.plot.refresh()
-
-
-class SSNMRTab(ttk.Frame):
-    PHASE_MODES = (
-        "Automatic phase",
-        "Saved TopSpin phase",
-        "Magnitude (phase independent)",
-        "No phase correction",
-    )
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        paned = ttk.Panedwindow(self, orient="horizontal")
-        paned.pack(fill="both", expand=True)
-        controls, graph = ttk.Frame(paned, padding=7), ttk.Frame(paned, padding=5)
-        controls.configure(width=570)
-        paned.add(controls, weight=0); paned.add(graph, weight=1)
-        row = ttk.Frame(controls)
-        ttk.Button(row, text="Add Bruker ZIP…", command=self.add_dialog).pack(side="left")
-        ttk.Button(row, text="Remove", command=lambda: self.tree.remove_selected()).pack(side="left", padx=4)
-        ttk.Button(row, text="Color…", command=lambda: self.tree.color_selected()).pack(side="left")
-        row.pack(fill="x", pady=(0, 5))
-        self.tree = SpectrumTree(controls, self._refresh)
-        self.tree.pack(fill="both", expand=True)
-        ttk.Label(
-            controls,
-            text="All supported 1D FIDs are listed. When 13C data are present, carbon spectra are shown by default and other nuclei remain hidden.",
-            foreground="#555555",
-            wraplength=520,
-        ).pack(anchor="w", pady=(5, 0))
-
-        process = ttk.LabelFrame(controls, text="ssNMR processing", padding=6)
-        process.pack(fill="x", pady=7)
-        self.saved_window = tk.BooleanVar(value=True)
-        self.phase_mode = tk.StringVar(value="Automatic phase")
-        self.extra_lb = tk.StringVar(value="0")
-        self.phase0 = tk.StringVar(value="0")
-        self.phase1 = tk.StringVar(value="0")
-        self.baseline = tk.BooleanVar(value=False)
-        self.normalization = tk.BooleanVar(value=True)
-        self.vertical_offset = tk.StringVar(value="0")
-        self.peaks = tk.BooleanVar(value=False)
-        self.prominence = tk.StringVar(value="0.05")
-        ttk.Checkbutton(process, text="Use saved TopSpin window function", variable=self.saved_window, command=self._refresh).grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(process, text="Phase mode").grid(row=1, column=0, sticky="w")
-        phase_box = ttk.Combobox(process, textvariable=self.phase_mode, values=self.PHASE_MODES, state="readonly", width=31)
-        phase_box.grid(row=1, column=1, sticky="ew", pady=2)
-        phase_box.bind("<<ComboboxSelected>>", lambda _: self._refresh())
-        phase_help = tk.Label(process, text="?", width=2, relief="solid", borderwidth=1, background="#eef3f8", cursor="hand2")
-        phase_help.grid(row=1, column=2, padx=(5, 0))
-        HoverTooltip(phase_help, lambda: tr("Automatic phase minimizes dispersive/negative signal in the expected nucleus range. Saved TopSpin phase uses PHC0/PHC1 from procs. Magnitude is phase-independent but broadens line shapes."))
-        fields = (
-            ("Additional line broadening (Hz)", self.extra_lb, 2),
-            ("P0 adjustment (degrees)", self.phase0, 3),
-            ("P1 adjustment (degrees)", self.phase1, 4),
-            ("Vertical offset", self.vertical_offset, 5),
-        )
-        for label, variable, row_number in fields:
-            ttk.Label(process, text=label).grid(row=row_number, column=0, sticky="w")
-            ttk.Entry(process, textvariable=variable, width=12).grid(row=row_number, column=1, sticky="e", pady=1)
-        ttk.Checkbutton(process, text="Linear edge baseline", variable=self.baseline, command=self._refresh).grid(row=6, column=0, columnspan=3, sticky="w")
-        ttk.Checkbutton(process, text="Normalize each spectrum", variable=self.normalization, command=self._refresh).grid(row=7, column=0, columnspan=3, sticky="w")
-        ttk.Checkbutton(process, text="Mark peaks", variable=self.peaks, command=self._refresh).grid(row=8, column=0, sticky="w")
-        ttk.Entry(process, textvariable=self.prominence, width=10).grid(row=8, column=1, sticky="e")
-        ttk.Button(process, text="Apply processing", command=self._refresh).grid(row=9, column=0, columnspan=3, sticky="ew", pady=(5, 0))
-        ttk.Button(process, text="View acquisition details…", command=self.view_details).grid(row=10, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-        process.columnconfigure(1, weight=1)
-
-        options = PlotOptions("Chemical shift", "ppm", "Intensity", "a.u.", line_width=2.0, reverse_x=True, x_min=-20.0, x_max=250.0, x_tick=50.0)
-        self.plot = PlotPane(graph, self._draw, options)
-        self.plot.pack(fill="both", expand=True)
-        self._cache: dict[tuple, np.ndarray] = {}
-
-    def add_dialog(self):
-        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Bruker/TopSpin ZIP"), "*.zip"), (tr("All files"), "*.*")))
-        self.add_paths(paths)
-
-    def add_paths(self, paths):
-        loaded: list[Spectrum] = []
-        skipped: list[str] = []
-        for path in paths:
-            try:
-                spectra, omitted = parse_bruker_zip(path)
-                loaded.extend(spectra)
-                skipped.extend(f"{Path(path).name}: {item}" for item in omitted)
-            except Exception as exc:
-                messagebox.showerror(tr("ssNMR import"), f"{Path(path).name}\n{exc}", parent=self)
-        if loaded:
-            self.tree.add(loaded)
-            carbon_count = sum(item.metadata.get("nucleus") == "13C" for item in loaded)
-            text = tr("Imported {count} one-dimensional spectra; {carbon} are 13C spectra.", count=len(loaded), carbon=carbon_count)
-            if skipped:
-                text += "\n\n" + tr("Skipped:") + "\n" + "\n".join(skipped)
-            messagebox.showinfo(tr("ssNMR import"), text, parent=self)
-
-    @staticmethod
-    def _float(variable: tk.StringVar, default: float = 0.0) -> float:
-        try:
-            return float(variable.get())
-        except ValueError:
-            return default
-
-    def _processed(self, spectrum: Spectrum) -> np.ndarray:
-        mode = canonical(self.phase_mode.get())
-        extra_lb = self._float(self.extra_lb)
-        phase0, phase1 = self._float(self.phase0), self._float(self.phase1)
-        key = (spectrum.uid, self.saved_window.get(), mode, extra_lb, phase0, phase1, self.baseline.get(), self.normalization.get())
-        if key not in self._cache:
-            metadata = spectrum.metadata
-            _x, values = process_bruker_1d(
-                metadata["raw_fid"], metadata["acquisition"], metadata["processing"],
-                use_saved_window=self.saved_window.get(), phase_mode=mode,
-                extra_line_broadening=extra_lb, phase0=phase0, phase1=phase1,
-                baseline=self.baseline.get(), normalize=self.normalization.get(),
-            )
-            self._cache[key] = values
-        return self._cache[key]
-
-    def _draw(self, axis, options):
-        visible = self.tree.visible()
-        offset = self._float(self.vertical_offset)
-        for curve_index, spectrum in enumerate(visible):
-            values = self._processed(spectrum) + curve_index * offset
-            kwargs = {"color": spectrum.metadata["color"]} if spectrum.metadata.get("color") else {}
-            line, = axis.plot(spectrum.x, values, label=spectrum.name, linewidth=options.line_width, **kwargs)
-            if self.peaks.get():
-                prominence = max(0.0, self._float(self.prominence, 0.05))
-                for index in ftir_peak_indices(values, prominence, troughs=False):
-                    axis.annotate(f"{spectrum.x[index]:.1f}", (spectrum.x[index], values[index]), xytext=(0, 8), textcoords="offset points", ha="center", va="bottom", fontsize=max(7, options.font_size - 3), color=line.get_color(), rotation=90)
-        if not visible:
-            axis.text(0.5, 0.5, tr("Add a Bruker ssNMR ZIP archive"), ha="center", va="center", transform=axis.transAxes)
-
-    def view_details(self):
-        selected = list(self.tree.tree.selection())
-        if len(selected) != 1:
-            messagebox.showinfo(tr("Acquisition details"), tr("Select exactly one spectrum."), parent=self)
-            return
-        spectrum = next(item for item in self.tree.spectra if item.uid == selected[0])
-        metadata = spectrum.metadata
-        acquisition, processing = metadata["acquisition"], metadata["processing"]
-        lines = (
-            f"{tr('Experiment')}: {metadata.get('experiment', '')}",
-            f"{tr('Nucleus')}: {metadata.get('nucleus', '')}",
-            f"{tr('Pulse program')}: {metadata.get('pulse_program', '')}",
-            f"{tr('Title')}: {metadata.get('title', '')}",
-            f"{tr('Scans')}: {metadata.get('ns', '')}",
-            f"{tr('MAS rate')}: {metadata.get('mas_hz', 0) / 1000:g} kHz",
-            f"{tr('Spectral width')}: {float(acquisition.get('SW_h', 0)):g} Hz",
-            f"{tr('Saved line broadening')}: {float(processing.get('LB', 0)):g} Hz",
-            f"PHC0 / PHC1: {processing.get('PHC0', 0)} / {processing.get('PHC1', 0)}",
-            f"{tr('Group delay')}: {acquisition.get('GRPDLY', 0)}",
-        )
-        messagebox.showinfo(tr("Acquisition details"), "\n".join(lines), parent=self)
 
     def _refresh(self):
         if hasattr(self, "plot"):
@@ -2933,7 +2776,7 @@ class LabPlotterApp(tk.Tk):
             tab._refresh()
 
     def smart_import(self):
-        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Lab data"), "*.csv *.txt *.tsv *.xml *.xlsx *.xlsm *.zip *.tif *.tiff"), (tr("All files"), "*.*")))
+        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Lab data"), "*.csv *.txt *.tsv *.xml *.xlsx *.xlsm *.asc *.tif *.tiff"), (tr("All files"), "*.*")))
         tem_paths = [path for path in paths if Path(path).suffix.casefold() in TIFF_SUFFIXES]
         if tem_paths:
             self.tem.add_paths(tem_paths)

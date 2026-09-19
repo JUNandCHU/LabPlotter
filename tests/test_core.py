@@ -19,7 +19,6 @@ from openpyxl import Workbook
 from labplotter.clipboard import _configure_windows_clipboard_api, png_to_dib
 from labplotter.config import SettingsStore
 from labplotter.i18n import LanguageManager, canonical, translate_value
-from labplotter.nmr import parse_bruker_zip
 from labplotter.ocr import OCR_COLUMNS, _Token, _table_from_tokens
 from labplotter.models import ZetaMeasurement
 from labplotter.parsers import detect_builtin_kind, parse_zetasizer_workbook
@@ -454,41 +453,6 @@ class ClipboardAndLanguageTests(unittest.TestCase):
             saved = store.load()
             self.assertEqual(saved["language"], "ko")
             self.assertEqual(saved["tree_column_widths"]["zetasizer_plot_selection"]["zavg"], 145)
-
-
-class SolidStateNMRTests(unittest.TestCase):
-    def test_bruker_zip_imports_1d_fid_and_reports_ser(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "synthetic.zip"
-            points = 128
-            time = np.arange(points) / 1000.0
-            fid = 100000 * np.exp(-time * 40.0) * np.exp(2j * np.pi * 100.0 * time)
-            interleaved = np.empty(points * 2, dtype="<i4")
-            interleaved[0::2] = np.real(fid).astype(np.int32)
-            interleaved[1::2] = np.imag(fid).astype(np.int32)
-            acqus = "\n".join((
-                "##$TD= 256", "##$DTYPA= 0", "##$BYTORDA= 0", "##$NC= 0",
-                "##$GRPDLY= 0", "##$SW_h= 1000", "##$SFO1= 100", "##$O1= 0",
-                "##$NUC1= <13C>", "##$PULPROG= <cp>", "##$MASR= 10000", "##$NS= 16",
-            ))
-            procs = "\n".join((
-                "##$SI= 512", "##$SW_p= 1000", "##$SF= 100", "##$OFFSET= 5",
-                "##$AXNUC= <13C>", "##$WDW= 0", "##$LB= 0", "##$PHC0= 0", "##$PHC1= 0",
-            ))
-            with zipfile.ZipFile(path, "w") as archive:
-                archive.writestr("sample/1/acqus", acqus)
-                archive.writestr("sample/1/fid", interleaved.tobytes())
-                archive.writestr("sample/1/pdata/1/procs", procs)
-                archive.writestr("sample/1/pdata/1/title", "synthetic 13C")
-                archive.writestr("sample/2/acqus", acqus)
-                archive.writestr("sample/2/ser", b"pseudo-2D")
-            self.assertEqual(detect_builtin_kind(path), "ssNMR")
-            spectra, skipped = parse_bruker_zip(path)
-            self.assertEqual(len(spectra), 1)
-            self.assertEqual(spectra[0].metadata["nucleus"], "13C")
-            self.assertEqual(len(spectra[0].x), 512)
-            self.assertTrue(np.all(np.isfinite(spectra[0].y)))
-            self.assertTrue(any("pseudo-2D" in item for item in skipped))
 
 
 if __name__ == "__main__":

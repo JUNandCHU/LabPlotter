@@ -1,4 +1,4 @@
-# LabPlotter 0.8.2
+# LabPlotter 0.8.3
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
@@ -53,23 +53,33 @@ FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고
 
 NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorbance입니다. Absorbance는 엄밀히 무차원이므로 기본 Y축 단위는 비워 두었습니다. 필요하면 그래프 설정에서 `a.u.`를 입력할 수 있습니다.
 
-### Solid-state NMR
+### Solid-state NMR (0.8.3)
 
-- Bruker/TopSpin 측정 폴더의 ZIP 파일을 압축 해제하지 않고 직접 import
-- `acqus`, `procs`, raw `fid`에서 1D spectrum과 ppm 축 복원
-- raw data byte order/type, digital group delay, 저장된 exponential window, zero filling 정보 반영
-- 다음 위상 표시 방식 지원
-  - Automatic phase: 해당 핵종 범위에서 분산형/음의 신호를 줄이는 자동 위상 보정
-  - Saved TopSpin phase: `procs`의 PHC0/PHC1 사용
-  - Magnitude: 위상과 무관한 크기 스펙트럼
-  - No phase correction
-- 추가 line broadening, P0/P1 미세조정, 양 끝 직선 baseline, 개별 spectrum 정규화
-- 여러 ZIP과 여러 experiment overlay, 개별 표시/숨김·이름·색상, vertical offset, peak 표시
-- experiment, nucleus, pulse program, title, scans, MAS rate, spectral width, saved LB 및 group delay 확인
-- ZIP에 13C가 있으면 탄소 스펙트럼을 기본 표시하고 1H calibration 데이터는 목록에만 보존
-- `ser` 기반 pseudo-2D/2D experiment는 현재 1D 탭에서 제외하고 import 결과에 사유 표시
+`Import ASCII TXT…`로 TopSpin의 **4열 ASCII**를 가져옵니다. **4열 ppm / 2열 intensity**를 사용하며 첫 줄의 1열에 제목이 있어도 측정점은 보존합니다. 이름은 파일명에서 확장자를 제외한 값이고 언제든 변경할 수 있습니다. ZIP/FID 가져오기는 제거했습니다.
 
-제공된 `20260216_25mm_PDA.zip`에는 processed `1r` 파일이 없으므로 raw FID에서 spectrum을 다시 계산합니다. Experiment 3의 13C CP와 experiment 4의 13C multiCP는 기본 표시되고, experiment 1의 1H one-pulse는 숨김 상태로 import되며 experiment 2의 saturation-recovery pseudo-2D `ser`는 제외됩니다. Raw 재처리 결과는 저장된 TopSpin 처리 파라미터와 자동 위상 보정을 사용하지만, 논문용 최종 정량/위상 결과는 원래 TopSpin 처리 결과와 함께 확인하는 것이 좋습니다.
+1. 왼쪽 목록에서 항목을 클릭하면 오른쪽에 해당 원본 스펙트럼이 표시됩니다.
+2. `Save to library`는 선택한 원본 데이터를 별도 `ssnmr_library.sqlite3`에 저장합니다. 이 파일은 앱 설치 폴더 밖의 사용자 데이터 폴더에 있어 업데이트 후에도 유지됩니다.
+3. `Open ssNMR library…`에서 저장 데이터를 재불러오기·이름 변경·삭제·순서 변경할 수 있습니다. 현재 목록에서 제거하는 동작과 라이브러리 삭제는 독립적입니다.
+4. `Compare two spectra…` → 기준 A와 비교 B 선택 → 전처리 설정 → `Process and compare`를 누르면 별도 비교 창이 열립니다.
+5. 비교 창의 ppm 범위와 적분 구간을 설정하고 `Calculate / update range`를 누릅니다. 결과는 **그래프 아래**에 표시됩니다. 두 검증 버튼은 계산 과정과 전처리 내역을 별도 창으로 엽니다.
+
+전처리 기본값:
+
+- ppm 범위는 두 파일의 전체 범위를 포함합니다. 공통 격자 간격은 두 입력 중 더 거친 간격을 기준으로 하며, 정확한 양끝점을 포함하기 위해 실제 간격이 미세 조정될 수 있습니다. 범위 밖 값은 NaN으로 남기고 외삽하거나 0으로 채우지 않습니다.
+- 실수 intensity만 있는 ASCII에는 허수 스펙트럼/FID가 없습니다. **내보낸 TopSpin 위상을 유지**하고 복소 위상 보정은 수행하지 않았음을 표시합니다.
+- 각 원본 전체 범위의 양끝 3% 중앙값으로 직선 베이스라인을 구해 뺍니다. 구간 양끝에 실제 피크가 있다면 설정을 검토하거나 보정을 끌 수 있습니다.
+- B에 최대 ±2 ppm의 일정한 이동을 적용해 기준 A와 정렬합니다. 전 구간 또는 지정 구간의 Pearson r을 최대화하며 이동량을 기록합니다. 형태를 늘이거나 부분적으로 왜곡하지 않습니다. 서로 다른 화학종의 피크 차이가 있는 경우 정렬 구간을 제한하거나 정렬을 끌 수 있습니다.
+- 두 데이터에 동일한 추가 Gaussian FWHM 0.3 ppm을 적용합니다. 0으로 설정하면 끕니다. 기존 TopSpin broadening을 되돌리거나 서로 다른 원래 해상도를 같게 만드는 기능은 아닙니다.
+- 공통 측정 범위의 최대 절대 intensity로 각각 정규화합니다. 전체 절대 면적 정규화 또는 정규화 없음도 가능합니다. 비교 창에서 통계 범위만 바꾸면 전처리는 바뀌지 않습니다.
+
+계산 정의:
+
+- **R² (직접 일치도)** = `1 − Σ(A−B)² / Σ(A−mean(A))²`. A가 기준이며 회귀로 B의 크기나 오프셋을 다시 맞추지 않습니다. 음수가 될 수 있습니다.
+- **r²** = Pearson r의 제곱. r도 같이 표시하므로 양/음의 상관을 구별할 수 있습니다. 상수 스펙트럼은 정의되지 않는 값을 `Undefined`로 표시합니다.
+- **적분비** = signed `I(0–50 ppm) / I(90–160 ppm)`가 기본이며 각 경계는 수정할 수 있습니다. ppm을 오름차순으로 놓고 정확한 경계점의 intensity를 선형 보간한 뒤 사다리꼴 면적을 합산합니다. 음의 값을 0으로 바꾸거나 절댓값 처리하지 않습니다. 영역 전체가 측정 범위에 들어와야 하며 분모가 거의 0이면 계산 불가입니다.
+- 검증 창에는 적용한 설정, 입력 해시, 이동량, 정규화 계수, 처리 단계별 각 점, 평균·잔차·제곱합 및 모든 적분 조각과 누적 면적이 포함됩니다. 전체 내역 TXT 및 처리 스펙트럼 CSV를 저장할 수 있습니다.
+
+웹도 동일한 계산 코어를 사용합니다. 웹 라이브러리는 브라우저 세션별이며 `Download library JSON`으로 원본·이름·순서를 저장하고 다음 접속 때 다시 가져옵니다. 다른 사용자와 공유하는 서버 DB는 만들지 않습니다.
 
 ### ZetaSizer particle library
 

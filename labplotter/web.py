@@ -13,7 +13,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from .models import Spectrum, ZetaMeasurement
-from .nmr import parse_bruker_zip, process_bruker_1d
+from .nmr import parse_topspin_ascii
 from .parsers import (
     parse_ftir_file,
     parse_generic_with_profile,
@@ -73,10 +73,10 @@ def parse_uploaded_payload(
                 spectrum.source = name
             return WebParseResult(kind, spectra=spectra)
         if kind == "ssNMR":
-            spectra, skipped = parse_bruker_zip(path)
+            spectra = [parse_topspin_ascii(path)]
             for spectrum in spectra:
                 spectrum.source = name
-            return WebParseResult(kind, spectra=spectra, skipped=skipped)
+            return WebParseResult(kind, spectra=spectra)
         if kind == "ZetaSizer":
             measurements = parse_zetasizer_workbook(path)
             for measurement in measurements:
@@ -109,39 +109,6 @@ def processed_ftir_spectra(spectra: Iterable[Spectrum], **options: Any) -> list[
         y = process_ftir(spectrum.x, spectrum.y, **options)
         output.append(replace(spectrum, y=y, metadata=dict(spectrum.metadata)))
     return output
-
-
-def processed_nmr_spectrum(
-    spectrum: Spectrum,
-    *,
-    phase_mode: str = "Automatic phase",
-    extra_line_broadening: float = 0.0,
-    phase0: float = 0.0,
-    phase1: float = 0.0,
-    baseline: bool = False,
-    normalize_values: bool = False,
-) -> Spectrum:
-    metadata = spectrum.metadata
-    raw_fid = metadata.get("raw_fid")
-    acquisition = metadata.get("acquisition")
-    processing = metadata.get("processing")
-    if raw_fid is None or not isinstance(acquisition, dict) or not isinstance(processing, dict):
-        values = np.asarray(spectrum.y, dtype=float)
-        if normalize_values:
-            values = normalize(values, "Maximum = 1")
-        return replace(spectrum, y=values, metadata=dict(metadata))
-    x, y = process_bruker_1d(
-        raw_fid,
-        acquisition,
-        processing,
-        phase_mode=phase_mode,
-        extra_line_broadening=extra_line_broadening,
-        phase0=phase0,
-        phase1=phase1,
-        baseline=baseline,
-        normalize=normalize_values,
-    )
-    return replace(spectrum, x=x, y=y, metadata=dict(metadata))
 
 
 def _default_colors(count: int) -> list[str]:
@@ -339,7 +306,6 @@ __all__ = [
     "parse_generic_payload",
     "parse_uploaded_payload",
     "processed_ftir_spectra",
-    "processed_nmr_spectrum",
     "spectra_figure",
     "tem_distribution_figure",
     "tem_overlay_figure",
