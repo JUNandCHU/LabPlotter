@@ -96,6 +96,7 @@ KO = {
     "Color": "색상",
     "Choose…": "선택…",
     "When Korean text is present, LabPlotter automatically uses an installed Hangul-capable fallback font.": "한글이 포함되면 LabPlotter가 설치된 한글 지원 글꼴을 자동으로 사용합니다.",
+    "Drag the legend directly on the graph to move it. Its position is saved automatically.": "그래프의 범례를 직접 드래그해 옮기세요. 위치는 자동으로 저장됩니다.",
     "Choose a line or shape, then drag directly on the graph. Positions are kept relative to the graph frame.": "선이나 도형을 선택한 뒤 그래프 위에서 직접 드래그하세요. 위치는 그래프 프레임을 기준으로 유지됩니다.",
     "New annotation": "새 주석 도형",
     "Type": "종류",

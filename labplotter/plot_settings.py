@@ -153,6 +153,13 @@ class PlotSettingsWindow(tk.Toplevel):
         self._font_group(parent, "Y-axis title", "y")
         self._font_group(parent, "Tick labels", "tick")
         self._font_group(parent, "Legend", "legend")
+        if getattr(self.pane, "draggable_legend", False):
+            ttk.Label(
+                parent,
+                text="Drag the legend directly on the graph to move it. Its position is saved automatically.",
+                foreground="#0B5CAD",
+                wraplength=620,
+            ).pack(anchor="w", pady=(0, 6))
         ttk.Label(
             parent,
             text="When Korean text is present, LabPlotter automatically uses an installed Hangul-capable fallback font.",

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 — 2026-08-10
+
+- Made the desktop ZetaSizer DLS and zeta distribution legends directly draggable.
+- Saved the DLS and zeta legend positions independently so they survive redraws, restarts, and updates.
+- Restoring a distribution graph to its tab defaults now also restores the legend to its default upper-right position.
+
 ## 0.8.1 — 2026-08-09
 
 - Added an initial Streamlit web edition that shares LabPlotter's desktop parsing and scientific analysis core.
