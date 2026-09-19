@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.5 — 2026-09-19
+
+- Added Aliphatic region / Aromatic region buttons to desktop and web spectrum comparison. Each click uses the current region bounds and immediately updates the plot and overall comparison statistics without rerunning preprocessing.
+- Invalid or unmeasured region selections leave the current comparison range intact and show a clear message.
+
 ## 0.8.4 — 2026-09-19
 
 - Fixed clipped ssNMR list/library text by sizing rows from the actual UI font.

@@ -5,7 +5,7 @@ import numpy as np
 import streamlit as st
 from labplotter.models import Spectrum
 from labplotter.nmr import (PHASE_NOTE, ComparisonSettings, default_settings, preprocess_pair,
-    comparison_region_metrics, integral_ratios, regional_metrics_audit, integrals_audit, preprocessing_audit, comparison_csv)
+    comparison_metrics, comparison_region_metrics, integral_ratios, regional_metrics_audit, integrals_audit, preprocessing_audit, comparison_csv)
 from labplotter.nmr_library import export_portable_library, import_portable_library
 from labplotter.plotting import PlotOptions
 from labplotter.web import parse_uploaded_payload, spectra_figure
@@ -118,10 +118,30 @@ def comparison_panel(t, show_figure, ratio_controls=None):
     st.caption(f"A ({t('reference')}): {r.names[0]} | B: {r.names[1]} | {t('Applied B shift')}: {r.log['alignment']['B_shift_added_ppm']:+.6g} ppm | {t('Grid')}: {len(r.x):,} | Gaussian FWHM: {r.settings.gaussian_fwhm_ppm:g} ppm")
     if r.log['alignment'].get('at_limit'):
         st.warning(t('Alignment reached the shift limit; inspect the overlay.'))
+    def show_region(low_key, high_key, defaults):
+        low = st.session_state.get(low_key, defaults[0])
+        high = st.session_state.get(high_key, defaults[1])
+        try:
+            comparison_metrics(r, low, high)
+        except (ValueError, TypeError):
+            st.session_state['_nmr_region_error'] = True
+            return
+        st.session_state.pop('_nmr_region_error', None)
+        st.session_state['nmr-compare-low-'+key] = low
+        st.session_state['nmr-compare-high-'+key] = high
     cols=st.columns(2)
-    low=cols[0].number_input(t('Comparison min')+' (ppm)',value=float(r.x[0]),key='nmr-compare-low-'+key)
-    high=cols[1].number_input(t('Comparison max')+' (ppm)',value=float(r.x[-1]),key='nmr-compare-high-'+key)
-    if low>=high:
+    cols[0].button(t('Aliphatic region'), key='nmr-view-aliphatic', on_click=show_region,
+                   args=('nmr-int-a-low', 'nmr-int-a-high', (0.0, 50.0)))
+    cols[1].button(t('Aromatic region'), key='nmr-view-aromatic', on_click=show_region,
+                   args=('nmr-int-r-low', 'nmr-int-r-high', (90.0, 160.0)))
+    if st.session_state.pop('_nmr_region_error', False):
+        st.error(t('The selected region needs increasing numeric bounds and at least three common measured points.'))
+    st.session_state.setdefault('nmr-compare-low-'+key, float(r.x[0]))
+    st.session_state.setdefault('nmr-compare-high-'+key, float(r.x[-1]))
+    cols=st.columns(2)
+    low=cols[0].number_input(t('Comparison min')+' (ppm)',value=None,key='nmr-compare-low-'+key)
+    high=cols[1].number_input(t('Comparison max')+' (ppm)',value=None,key='nmr-compare-high-'+key)
+    if low is None or high is None or low>=high:
         st.error(t('Comparison minimum must be less than maximum.')); return
     ratio = None
     if ratio_controls is not None:

@@ -9,7 +9,7 @@ import numpy as np
 from .i18n import tr
 from .models import Spectrum
 from .nmr import (PHASE_NOTE, ComparisonSettings, default_settings, parse_topspin_ascii,
-                  preprocess_pair, comparison_region_metrics, regional_metrics_audit, integral_ratios,
+                  preprocess_pair, comparison_metrics, comparison_region_metrics, regional_metrics_audit, integral_ratios,
                   integrals_audit, preprocessing_audit, comparison_csv)
 from .nmr_library import NMRLibrary
 from .plotting import PlotOptions, SERIES_PALETTE
@@ -122,6 +122,11 @@ class ComparisonWindow(tk.Toplevel):
         self.plot = PlotPane(self, self._draw, PlotOptions("Chemical shift", "ppm", "Intensity", "normalized a.u.", reverse_x=True), compact=True)
         self.plot.grid(row=1, column=0, sticky="nsew", padx=8)
         lower = ttk.LabelFrame(self, text=tr("Comparison results"), padding=8); lower.grid(row=2, column=0, sticky="ew", padx=8, pady=8)
+        region_buttons = ttk.Frame(lower); region_buttons.pack(fill="x", pady=(0,6))
+        ttk.Label(region_buttons, text=tr("View region")+":").pack(side="left", padx=(0,6))
+        for label, low_key, high_key in (("Aliphatic region", "alow", "ahigh"), ("Aromatic region", "rlow", "rhigh")):
+            ttk.Button(region_buttons, text=tr(label),
+                       command=lambda lo=low_key, hi=high_key: self.show_region(lo, hi)).pack(side="left", padx=(0,6))
         bounds = ttk.Frame(lower); bounds.pack(fill="x")
         self.fields = {}
         for label, key, value in (("Comparison min", "low", result.x[0]), ("Comparison max", "high", result.x[-1]),
@@ -144,6 +149,16 @@ class ComparisonWindow(tk.Toplevel):
         for var in self.fields.values():
             var.trace_add("write", self._invalidate)
         self._process_status(); self.calculate()
+
+    def show_region(self, low_key, high_key):
+        low, high = self.fields[low_key].get(), self.fields[high_key].get()
+        try:
+            comparison_metrics(self.result, float(low), float(high))
+        except (ValueError, TypeError):
+            messagebox.showerror(tr("Comparison range"), tr("The selected region needs increasing numeric bounds and at least three common measured points."), parent=self)
+            return
+        self.fields['low'].set(low); self.fields['high'].set(high)
+        self.calculate()
 
     def _invalidate(self, *_):
         self.metrics = self.ratios = None

@@ -1,4 +1,4 @@
-# LabPlotter 0.8.4
+# LabPlotter 0.8.5
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
@@ -60,7 +60,7 @@ FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer 및 TEM TIFF 데이터를 플롯하고
 
 NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorbance입니다. Absorbance는 엄밀히 무차원이므로 기본 Y축 단위는 비워 두었습니다. 필요하면 그래프 설정에서 `a.u.`를 입력할 수 있습니다.
 
-### Solid-state NMR (0.8.4)
+### Solid-state NMR (0.8.5)
 
 `Import ASCII TXT…`로 TopSpin의 **4열 ASCII**를 가져옵니다. **4열 ppm / 2열 intensity**를 사용하며 첫 줄의 1열에 제목이 있어도 측정점은 보존합니다. 이름은 파일명에서 확장자를 제외한 값이고 언제든 변경할 수 있습니다. ZIP/FID 가져오기는 제거했습니다.
 
@@ -69,6 +69,8 @@ NanoDrop의 `10mm Absorbance`는 10 mm optical path length로 환산된 absorban
 3. `Open ssNMR library…`에서 저장 데이터를 재불러오기·이름 변경·삭제·순서 변경할 수 있습니다. 현재 목록에서 제거하는 동작과 라이브러리 삭제는 독립적입니다.
 4. `Compare two spectra…` → 기준 A와 비교 B 선택 → 전처리 설정 → `Process and compare`를 누르면 별도 비교 창이 열립니다.
 5. 비교 창의 ppm 범위와 적분 구간을 바꾸면 결과가 자동으로 갱신됩니다. `Calculate / update range`로 즉시 적용할 수도 있습니다. 전체 비교 구간·Aliphatic·Aromatic 각각의 R², r², r, N과 두 스펙트럼의 적분비가 **그래프 아래**에 표시됩니다. 두 검증 버튼은 세 구간의 계산 과정과 전처리 내역을 별도 창으로 엽니다.
+
+`Aliphatic region` / `Aromatic region` 버튼은 현재 입력된 해당 구간으로 그래프와 전체 비교 범위를 즉시 전환하고 R²·r²를 갱신합니다. 구간을 수정하면 버튼도 수정한 값을 사용합니다. 전처리와 정규화는 다시 수행하지 않습니다.
 
 전처리 기본값:
 

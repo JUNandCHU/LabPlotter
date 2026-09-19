@@ -23,7 +23,7 @@ are cached only in that Streamlit session, and the app does not expose a shared
 database. LabPlotter does not intentionally persist them after the session ends.
 
 
-## ssNMR in 0.8.4
+## ssNMR in 0.8.5
 
 Import four-column TopSpin ASCII TXT (ppm column 4, real intensity column 2).
 ZIP/FID import has been removed. Select two loaded spectra for preprocessing

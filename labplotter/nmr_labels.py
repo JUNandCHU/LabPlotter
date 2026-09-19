@@ -1,5 +1,7 @@
 """Shared Korean labels for the desktop and web ssNMR workspace."""
 KO = {
+    'View region': '표시 구간',
+    'The selected region needs increasing numeric bounds and at least three common measured points.': '선택한 구간의 최솟값과 최댓값을 숫자로 입력하고, 최솟값을 더 작게 설정하세요. 두 스펙트럼의 공통 측정점이 최소 3개 필요합니다.',
     'Comparison range': '전체 비교 구간',
     'Aliphatic region': 'Aliphatic 구간',
     'Aromatic region': 'Aromatic 구간',
