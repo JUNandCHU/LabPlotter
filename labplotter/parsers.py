@@ -245,6 +245,11 @@ def detect_builtin_kind(path: str | Path) -> str | None:
     if suffix in {".tif", ".tiff"}:
         return "TEM"
     if suffix in {".csv", ".tsv", ".txt", ".asc"}:
+        from .lab_dls import is_dls_header
+        rows = _delimited_rows(path)
+        first = next((row for row in rows if any(v.strip() for v in row)), [])
+        if is_dls_header(first):
+            return "Lab DLS"
         # A TopSpin table has sequential index rows and a linear Hz/ppm axis.
         # Probe with the real parser; ordinary two-column FTIR remains unchanged.
         from .nmr import parse_topspin_ascii

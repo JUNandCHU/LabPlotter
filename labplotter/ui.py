@@ -30,6 +30,7 @@ from .config import SettingsStore
 from .i18n import canonical, language, localize_widget_tree, manager as language_manager, set_language, tr, translate_value
 from .models import Spectrum
 from .nmr_ui import SSNMRTab
+from .lab_dls_ui import LabDLSTab
 from .ocr import OCRTable, run_table_ocr
 from .parsers import (
     detect_builtin_kind,
@@ -226,6 +227,7 @@ class PlotPane(ttk.Frame):
         draggable_legend: bool = False,
         legend_position: tuple[float, float] | None = None,
         legend_position_changed: Callable[[tuple[float, float] | None], None] | None = None,
+        export_current_view: bool = False,
     ):
         super().__init__(parent)
         self.draw_callback = draw_callback
@@ -238,6 +240,8 @@ class PlotPane(ttk.Frame):
         self._legend_artist = None
         self._legend_drag_started = False
         self.figure = Figure(figsize=(8.5, 6.2), dpi=100)
+        self.export_current_view = export_current_view
+        self.figure._labplotter_export_current_view = export_current_view
         self.axis = self.figure.add_subplot(111)
         self.canvas_host = ttk.Frame(self)
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.canvas_host)
@@ -633,6 +637,9 @@ class PlotPane(ttk.Frame):
             self.annotation_artists.append(artist)
 
     def _with_annotation_visibility(self, visible: bool, callback: Callable):
+        if self.export_current_view:
+            self.canvas.draw()
+            return callback()
         artists = [*self.annotation_artists, *self.overlay_artists]
         previous = [artist.get_visible() for artist in artists]
         try:
@@ -2784,12 +2791,14 @@ class LabPlotterApp(tk.Tk):
         self.nano = NanoDropTab(self.notebook)
         self.nmr = SSNMRTab(self.notebook)
         self.zeta = ZetaTab(self.notebook, ParticleLibrary())
+        self.lab_dls = LabDLSTab(self.notebook)
         self.tem = TEMTab(self.notebook, TEMLibrary())
         self.generic = GenericTab(self.notebook)
         self.notebook.add(self.ftir, text="FTIR")
         self.notebook.add(self.nano, text="NanoDrop UV–Vis")
         self.notebook.add(self.nmr, text="ssNMR")
         self.notebook.add(self.zeta, text="ZetaSizer library")
+        self.notebook.add(self.lab_dls, text="Lab DLS")
         self.notebook.add(self.tem, text="TEM particle size")
         self.notebook.add(self.generic, text="Custom formats")
         self.notebook.enable_traversal()
@@ -2805,7 +2814,7 @@ class LabPlotterApp(tk.Tk):
     def _language_changed(self, old_language: str, new_language: str):
         localize_widget_tree(self, old_language, new_language)
         self.language_var.set("한국어" if new_language == "ko" else "English")
-        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.tem, self.generic):
+        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.lab_dls, self.tem, self.generic):
             for plot in getattr(tab, "plot_panes", (tab.plot,)):
                 plot.language_changed(old_language, new_language)
         self.tem._refresh()
@@ -2833,7 +2842,7 @@ class LabPlotterApp(tk.Tk):
         )
 
     def _initial_draw(self):
-        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.tem, self.generic):
+        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.lab_dls, self.tem, self.generic):
             tab._refresh()
 
     def smart_import(self):
@@ -2851,6 +2860,8 @@ class LabPlotterApp(tk.Tk):
                     self.nano.add_paths([path]); self.notebook.select(self.nano)
                 elif kind == "ssNMR":
                     self.nmr.add_paths([path]); self.notebook.select(self.nmr)
+                elif kind == "Lab DLS":
+                    self.lab_dls.add_paths([path]); self.notebook.select(self.lab_dls)
                 elif kind == "ZetaSizer":
                     self.zeta.add_paths([path])
                     self.notebook.select(self.zeta)

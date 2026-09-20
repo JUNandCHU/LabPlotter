@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0 — 2026-09-20
+
+- Added an independent Lab DLS tab for sparse Radius/Meas CSV distributions, with filename-based particle names, a right-side data list and two left-side plots. Kept the existing ZetaSizer workflow.
+- Applied the supplied PDF defaults: radius 0.01–1,000,000 nm on a log axis, intensity 0–20%, raw connected measurement points. Added full-height Y fitting for taller peaks.
+- Added an independent persistent Lab DLS library with save, rename, load, delete and reorder, plus explicit overlay registration/removal, equal-weight log-grid representative curves and an all-measurements switch.
+- Added configurable mean-radius lines and mean R labels, draggable desktop label positions, and export of the exact visible graph. Overlay annotations start disabled; shared color/ratio controls remain available.
+- Added below-graph per-measurement and arithmetic-average radius, diameter and distribution %PD results, CSV exports and calculation explanations distinguishing distribution moments from cumulants Z-average/PDI.
+- Added font-aware row heights/scrollbars to all Lab DLS lists and a web companion with portable session libraries and numeric annotation positioning.
+
 ## 0.8.6 — 2026-09-19
 
 - Changed Aliphatic/Aromatic shortcuts to rerun preprocessing from preserved raw spectra, using the selected ppm range for alignment, grid, smoothing and normalization. Added an editable Custom region shortcut, defaulting to 0–200 ppm.

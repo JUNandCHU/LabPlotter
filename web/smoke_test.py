@@ -13,10 +13,10 @@ def main() -> None:
     if app.exception:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     titles = [item.value for item in app.title]
-    if titles != ["LabPlotter Web 0.8.6"]:
+    if titles != ["LabPlotter Web 0.9.0"]:
         raise RuntimeError(f"Unexpected title: {titles}")
     labels = [item.label for item in app.tabs]
-    expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "TEM", "Custom format"]
+    expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "Lab DLS", "TEM", "Custom format"]
     if labels != expected:
         raise RuntimeError(f"Unexpected tabs: {labels}")
 
@@ -78,6 +78,38 @@ def main() -> None:
     korean.button(key="nmr-save").click().run()
     if len(korean.session_state["_nmr_library"]) != 1:
         raise RuntimeError("ssNMR session library save failed")
+
+    # Lab DLS uses a separate list/library and never auto-registers overlays.
+    from labplotter.lab_dls import parse_dls_text
+    raw='Radius (nm),Meas 1,Meas 3\n1,0,0\n10,25,50\n100,75,50\n1000,0,0\n'
+    dls=AppTest.from_file(str(app_path),default_timeout=45)
+    particles=[parse_dls_text(raw, name+'.csv') for name in ('A','B')]
+    dls.session_state['_lab_dls_particles']=particles
+    dls.run()
+    if dls.exception or dls.session_state['lab-dls-overlay-plot-curve-count']!=0:
+        raise RuntimeError('Lab DLS startup/explicit registration failed')
+    dls.button(key='lab-dls-register').click().run()
+    dls.selectbox(key='lab-dls-selected').set_value(particles[1].uid).run()
+    dls.button(key='lab-dls-register').click().run()
+    if dls.exception or dls.session_state['lab-dls-overlay-plot-curve-count']!=2:
+        raise RuntimeError('Lab DLS representative overlay failed')
+    dls.checkbox(key='lab-dls-all').check().run()
+    if dls.exception or dls.session_state['lab-dls-overlay-plot-curve-count']!=4:
+        raise RuntimeError('Lab DLS all-measurement overlay failed')
+    dls.button(key='lab-dls-selected-plot-fit-y').click().run()
+    if dls.exception or float(dls.session_state['lab-dls-selected-plot-ymax'])<=75:
+        raise RuntimeError('Lab DLS Y fit failed')
+    dls.button(key='lab-dls-save').click().run()
+    if len(dls.session_state['_lab_dls_library'])!=1:
+        raise RuntimeError('Lab DLS library save failed')
+    dls.button(key='lab-dls-library').click().run()
+    if dls.exception:
+        raise RuntimeError('Lab DLS library dialog failed')
+    korean.session_state['_lab_dls_particles']=particles
+    korean.run()
+    korean.button(key='lab-dls-register').click().run()
+    if korean.exception or korean.session_state['lab-dls-overlay-plot-curve-count']!=1:
+        raise RuntimeError('Korean Lab DLS overlay failed')
 
 
 if __name__ == "__main__":
