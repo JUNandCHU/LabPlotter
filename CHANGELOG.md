@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1 — 2026-09-21
+
+- Moved the Lab DLS data list to the left and added per-measurement Hide/Exclude checkboxes. Exclusion immediately recomputes included counts, arithmetic averages, representative distributions and overlays without changing raw data. Saved libraries retain both flags and read older entries.
+- Added quick mean-label/mean-line toggles, label-position reset buttons and a selected-particle average-distribution mode below the graphs.
+- Collapsed overlay results into one average row per particle, with +/− expansion for measurements and excluded-row indicators. Kept font-metric row heights and scrollbars.
+- Added a Legend visibility control to every desktop plot toolbar. Click a legend to unlock editing, drag inside to move or corners to resize/reflow, then click outside or Esc to finish. Saved/copied images omit editing handles and retain layout.
+- Updated the web companion with the left data list, measurement controls, quick annotations, average mode and collapsed overlay details.
+
 ## 0.9.0 — 2026-09-20
 
 - Added an independent Lab DLS tab for sparse Radius/Meas CSV distributions, with filename-based particle names, a right-side data list and two left-side plots. Kept the existing ZetaSizer workflow.

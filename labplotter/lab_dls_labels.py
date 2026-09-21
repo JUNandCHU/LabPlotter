@@ -2,6 +2,17 @@
 from .lab_dls import STATISTICS_NOTE, AVERAGING_NOTE
 
 KO = {
+    "Hide": "숨김",
+    "Exclude": "분석 제외",
+    "[excluded]": "[제외됨]",
+    "Average (n={n})": "평균 (n={n})",
+    "Mean R labels": "mean R 표시",
+    "Mean lines": "평균 수직선",
+    "Average distribution only": "평균 분포만 표시",
+    "Averages use included measurements. Hide only affects individual curves.": "평균은 분석에 포함한 측정만 사용합니다. 숨김은 개별 곡선 표시에만 적용됩니다.",
+    "Particle averages; expand + for individual measurements.": "입자별 평균입니다. +를 누르면 개별 측정이 펼쳐집니다.",
+    "No visible measurements. Check Hide / Exclude.": "표시할 측정이 없습니다. 숨김·분석 제외 설정을 확인하세요.",
+    "Click the legend to edit it. Drag inside to move, or a corner to resize. Click outside or press Esc to finish.": "범례를 클릭해 편집을 켜세요. 안쪽을 드래그하면 이동하고 모서리를 드래그하면 크기가 바뀝니다. 바깥을 클릭하거나 Esc를 누르면 편집이 끝납니다.",
     "Radius": "반지름",
     "Lab DLS library": "Lab DLS 라이브러리",
     "Import Lab DLS CSV…": "Lab DLS CSV 가져오기…",
@@ -55,6 +66,6 @@ KO = {
     "Label X": "주석 X 위치",
     "Label Y": "주석 Y 위치",
     "Mean R labels can be dragged in the desktop edition; use X/Y positions here.": "데스크톱에서는 mean R 주석을 드래그할 수 있습니다. 웹에서는 X/Y 위치를 입력하세요.",
-    STATISTICS_NOTE: "CSV 분포 계산: 평균 R = Σ(I×R)/ΣI, 평균 D = 2×평균 R, %PD = 100×√[Σ(I×(R-평균 R)²)/ΣI]/평균 R입니다. 화면 축 범위와 관계없이 모든 원본 bin을 계산에 사용합니다. 측정 평균은 각 측정 결과의 산술평균입니다. 장비의 cumulants Z-average 또는 PDI 값과는 다릅니다.",
-    AVERAGING_NOTE: "대표 곡선: 각 측정을 공통의 균일한 log(radius) 좌표에 선형 보간한 뒤 동일 가중치로 평균합니다. smoothing, fitting, 피크 정규화는 하지 않습니다. 끝부분이 0인 분포만 바깥을 0으로 확장합니다. 대표 곡선의 mean R은 해당 곡선에서 계산하며, 개별 측정 결과의 평균은 별도로 표시합니다.",
+    STATISTICS_NOTE: "CSV 분포 계산: 평균 R = Σ(I×R)/ΣI, 평균 D = 2×평균 R, %PD = 100×√[Σ(I×(R-평균 R)²)/ΣI]/평균 R입니다. 화면 축 범위와 관계없이 모든 원본 bin을 계산에 사용합니다. 측정 평균은 분석에 포함한 측정 결과의 산술평균입니다. 숨김은 개별 곡선 표시에만 적용하고, 분석 제외는 모든 평균 계산에서 제외합니다. 장비의 cumulants Z-average 또는 PDI 값과는 다릅니다.",
+    AVERAGING_NOTE: "대표 곡선: 분석에 포함한 측정을 공통의 균일한 log(radius) 좌표에 선형 보간한 뒤 동일 가중치로 평균합니다. smoothing, fitting, 피크 정규화는 하지 않습니다. 끝부분이 0인 분포만 바깥을 0으로 확장합니다. 대표 곡선의 mean R은 해당 곡선에서 계산하며, 개별 측정 결과의 평균은 별도로 표시합니다.",
 }

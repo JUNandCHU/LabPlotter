@@ -32,10 +32,11 @@ def dls_plot_options():
                        legend_font_size=9)
 
 
-def plot_series(particles, overlay=False, all_measurements=False):
+def plot_series(particles, overlay=False, all_measurements=False, average=False):
     curves, errors = [], []
+    representative = average or (overlay and not all_measurements)
     for pi, p in enumerate(particles):
-        if overlay and not all_measurements:
+        if representative:
             try:
                 measurements = [representative_curve(p)]
             except ValueError as exc:
@@ -44,8 +45,10 @@ def plot_series(particles, overlay=False, all_measurements=False):
         else:
             measurements = p.measurements
         for mi, m in enumerate(measurements):
-            label = p.name if overlay and not all_measurements else (f"{p.name} / {m.name}" if overlay else m.name)
-            key = f"{p.uid}:{'mean' if overlay and not all_measurements else m.name}"
+            if m.excluded or m.hidden:
+                continue
+            label = p.name if representative else (f"{p.name} / {m.name}" if overlay else m.name)
+            key = f"{p.uid}:{'mean' if representative else m.name}"
             curves.append((key, label, m, SERIES_PALETTE[(pi if overlay else mi) % len(SERIES_PALETTE)],
                            ("-", "--", "-.", ":")[mi % 4] if overlay and all_measurements else "-"))
     return curves, errors
@@ -132,6 +135,9 @@ class MeanLabelDrag:
 
     def press(self, event):
         if event.button != 1 or event.inaxes is not self.pane.axis or self.pane.toolbar.mode or self.pane._pending_annotation:
+            return
+        editor = getattr(self.pane, "legend_editor", None)
+        if editor is not None and editor.contains(event):
             return
         for key, artist in reversed(list(self.artists.items())):
             if artist.contains(event)[0]:

@@ -52,7 +52,19 @@ def library_dialog(t):
 
 
 def render_plot(t, particles, key, overlay, all_measurements, show_figure, plot_options):
-    curves, errors = plot_series(particles, overlay, all_measurements)
+    graph = st.container()
+    quick = st.columns(2)
+    lines = quick[0].checkbox(t('Mean lines'), value=not overlay, key=key+'-lines')
+    labels = quick[1].checkbox(t('Mean R labels'), value=not overlay, key=key+'-labels')
+    average = (not overlay) and st.checkbox(t('Average distribution only'), key=key+'-average')
+    positions = st.session_state.setdefault(key+'-positions', {})
+    def reset_positions():
+        positions.clear()
+        for widget_key in list(st.session_state):
+            if widget_key.startswith((key+'-label-x-', key+'-label-y-')):
+                del st.session_state[widget_key]
+    st.button(t('Reset mean R label positions'), key=key+'-label-reset', on_click=reset_positions)
+    curves, errors = plot_series(particles, overlay, all_measurements, average=average)
     for error in errors:
         st.warning(error)
     def fit_y():
@@ -63,8 +75,6 @@ def render_plot(t, particles, key, overlay, all_measurements, show_figure, plot_
                                 'x_min':.01, 'x_max':1_000_000, 'y_min':0, 'y_max':20})
     with st.expander(t('Lab DLS annotations')):
         c = st.columns(2)
-        lines = c[0].checkbox(t('Show mean-radius lines'), value=not overlay, key=key+'-lines')
-        labels = c[1].checkbox(t('Show mean R labels'), value=not overlay, key=key+'-labels')
         style = DLSStyle(show_lines=lines, show_labels=labels,
             line_style=c[0].selectbox(t('Mean line style'), ['--','-',':','-.'], key=key+'-mean-style'),
             line_width=c[1].number_input(t('Mean line width'), .1,20.0,1.2,.1, key=key+'-mean-width'),
@@ -85,7 +95,6 @@ def render_plot(t, particles, key, overlay, all_measurements, show_figure, plot_
     with st.expander(t('Series colors')):
         for uid, label, _, color, _ in curves:
             colors[uid] = st.color_picker(label, color, key=key+'-color-'+uid)
-    positions = st.session_state.setdefault(key+'-positions', {})
     figure = dls_figure(curves, options, style, positions, colors)
     if style.show_labels and curves:
         with st.expander(t('Label positions (graph fractions)')):
@@ -101,20 +110,41 @@ def render_plot(t, particles, key, overlay, all_measurements, show_figure, plot_
             if st.button(t('Apply'), key=key+'-label-apply'):
                 positions[uid] = (x,y)
                 figure = dls_figure(curves, options, style, positions, colors)
-            if st.button(t('Reset mean R label positions'), key=key+'-label-reset'):
-                positions.clear(); st.rerun()
-    show_figure(figure, key)
+    with graph:
+        show_figure(figure, key)
     if options.y_max is not None and any(c[2].intensity.max() > options.y_max for c in curves):
         st.caption(t('Peaks exceed the Y range. Use Fit Y axis to see the full curves.'))
     st.subheader(t('Distribution results'))
-    rows = statistics_rows(particles, overlay and not all_measurements)
-    display = [{t('Particle'): r['particle'], t('Measurement'): r['measurement'], t('Mean R (nm)'):r['mean_radius'],
-                t('Mean D (nm)'):r['mean_diameter'],t('%PD (distribution)'):r['pd_percent']} for r in rows]
-    if display:
-        st.dataframe(display, hide_index=True, width='stretch')
-        st.download_button(t('Export results…'),statistics_csv(particles,overlay and not all_measurements),
+    representative = average or (overlay and not all_measurements)
+    rows = statistics_rows(particles, representative)
+    def display_row(r):
+        label = t('Average (n={n})').format(n=r['included_count']) if r['kind']=='average' else t(r['measurement'])
+        if r['excluded']:label += ' ' + t('[excluded]')
+        return {t('Particle'):r['particle'], t('Measurement'):label, t('Mean R (nm)'):r['mean_radius'],
+                t('Mean D (nm)'):r['mean_diameter'],t('%PD (distribution)'):r['pd_percent']}
+    if rows:
+        st.dataframe([display_row(r) for r in rows if r['kind']=='average'], hide_index=True, width='stretch')
+        if overlay:
+            for p in particles:
+                with st.expander('+ '+p.name, expanded=False):
+                    st.dataframe([display_row(r) for r in rows if r['particle_uid']==p.uid and r['kind']=='measurement'], hide_index=True, width='stretch')
+            st.caption(t('Particle averages; expand + for individual measurements.'))
+        else:
+            for p in particles:
+                editor_key = key+'-measurements-'+p.uid
+                def change_measurements(p=p, editor_key=editor_key):
+                    for index, changes in st.session_state[editor_key].get('edited_rows', {}).items():
+                        for label, field in ((t('Hide'),'hidden'),(t('Exclude'),'excluded')):
+                            if label in changes:
+                                setattr(p.measurements[int(index)],field,bool(changes[label]))
+                values = [{t('Hide'):r['hidden'], t('Exclude'):r['excluded'], **display_row(r)}
+                          for r in rows if r['particle_uid']==p.uid and r['kind']=='measurement']
+                st.data_editor(values, hide_index=True, width='stretch', key=editor_key,
+                               disabled=[k for k in values[0] if k not in (t('Hide'),t('Exclude'))],
+                               on_change=change_measurements)
+            st.caption(t('Averages use included measurements. Hide only affects individual curves.'))
+        st.download_button(t('Export results…'),statistics_csv(particles,representative),
                            'Lab_DLS_results.csv','text/csv',key=key+'-results')
-    st.caption(t('CSV intensity-weighted distribution; all exported bins.'))
     st.session_state[key+'-curve-count'] = len(curves)
 
 
@@ -123,9 +153,9 @@ def render_lab_dls_page(t, show_figure, plot_options):
     library = st.session_state.setdefault('_lab_dls_library', [])
     overlay = st.session_state.setdefault('_lab_dls_overlay', [])
     st.caption(t('Lab DLS uses Radius (nm), Meas 1, Meas 2, ... CSV exports.'))
-    main, right = st.columns([3,1])
+    left, main = st.columns([1,3])
     selected = None
-    with right:
+    with left:
         uploads = st.file_uploader(t('Import Lab DLS CSV…'), type=['csv'], accept_multiple_files=True, key='lab-dls-upload')
         if st.button(t('Import files'),key='lab-dls-import',disabled=not uploads):
             for upload in uploads:

@@ -303,7 +303,7 @@ class ZetaDashboardTests(unittest.TestCase):
         figure.tight_layout()
         self.assertGreater(axis.get_position().height, 0.6)
 
-    def test_compact_legend_can_restore_a_draggable_axes_position(self):
+    def test_compact_legend_restores_position_but_starts_locked(self):
         figure = Figure(figsize=(6, 4))
         axis = figure.add_subplot(111)
         axis.plot([0, 1], [0, 1], label="JM66_PDA")
@@ -318,7 +318,7 @@ class ZetaDashboardTests(unittest.TestCase):
         legend = PlotPane._create_legend(pane)
         anchor = legend.get_bbox_to_anchor()
         axes_position = axis.transAxes.inverted().transform((anchor.x0, anchor.y0))
-        self.assertTrue(legend.get_draggable())
+        self.assertFalse(legend.get_draggable())
         np.testing.assert_allclose(axes_position, (0.18, 0.22))
 
     def test_zetasizer_legend_positions_are_external_and_independent(self):

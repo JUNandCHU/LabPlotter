@@ -35,6 +35,9 @@ class DLSLibrary:
         arrays = {}
         for i, m in enumerate(particle.measurements):
             arrays[f"x{i}"], arrays[f"y{i}"] = m.radius, m.intensity
+        # Additional NPZ arrays preserve the 0.9.0 names/schema and raw data.
+        arrays["hidden"] = np.array([m.hidden for m in particle.measurements], dtype=bool)
+        arrays["excluded"] = np.array([m.excluded for m in particle.measurements], dtype=bool)
         stream = BytesIO()
         np.savez_compressed(stream, **arrays)
         with closing(self._connect()) as db, db:
@@ -48,7 +51,9 @@ class DLSLibrary:
         if row is None:
             raise KeyError("The particle no longer exists in the Lab DLS library.")
         with np.load(BytesIO(row["arrays"]), allow_pickle=False) as arrays:
-            measurements = [DLSMeasurement(name, arrays[f"x{i}"], arrays[f"y{i}"])
+            measurements = [DLSMeasurement(name, arrays[f"x{i}"], arrays[f"y{i}"],
+                                           bool(arrays["hidden"][i]) if "hidden" in arrays else False,
+                                           bool(arrays["excluded"][i]) if "excluded" in arrays else False)
                             for i, name in enumerate(json.loads(row["measurements"]))]
         return DLSParticle(row["name"], measurements, row["source"], row["uid"])
 
@@ -75,7 +80,8 @@ class DLSLibrary:
 def export_dls_library(particles):
     return json.dumps({"format": "LabPlotter Lab DLS library", "version": 1, "particles": [
         {"uid": p.uid, "name": p.name, "source": p.source, "measurements": [
-            {"name": m.name, "radius": m.radius.tolist(), "intensity": m.intensity.tolist()}
+            {"name": m.name, "radius": m.radius.tolist(), "intensity": m.intensity.tolist(),
+             "hidden": m.hidden, "excluded": m.excluded}
             for m in p.measurements]} for p in particles]}, ensure_ascii=False, allow_nan=False)
 
 
@@ -92,7 +98,8 @@ def import_dls_library(payload):
             uid = row["uid"]
             if not isinstance(uid, str) or not uid or uid in seen or not isinstance(row["name"], str):
                 raise ValueError("Library entries need unique IDs and nonempty names.")
-            measurements = [DLSMeasurement(m["name"], m["radius"], m["intensity"]) for m in row["measurements"]]
+            measurements = [DLSMeasurement(m["name"], m["radius"], m["intensity"], m.get("hidden", False), m.get("excluded", False))
+                            for m in row["measurements"]]
             particles.append(DLSParticle(row["name"], measurements, str(row.get("source", "")), uid))
             seen.add(uid)
     except (KeyError, TypeError, AttributeError) as exc:

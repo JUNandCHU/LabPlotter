@@ -20,11 +20,11 @@ STATISTICS_NOTE = (
     "CSV distribution statistics: mean R = sum(I × R) / sum(I); mean D = 2 × mean R; "
     "%PD = 100 × sqrt(sum(I × (R - mean R)²) / sum(I)) / mean R. "
     "All exported bins are used, regardless of the displayed axis range. "
-    "Measurement average is the arithmetic mean of the individual results. "
+    "Measurement average is the arithmetic mean of included individual results. Hide only affects individual curves; Exclude removes measurements from all averages. "
     "These values are not the instrument's cumulants Z-average or PDI."
 )
 AVERAGING_NOTE = (
-    "Representative curve: equal-weight mean of measurements interpolated linearly in log(radius) "
+    "Representative curve: equal-weight mean of included measurements interpolated linearly in log(radius) "
     "on a common, uniformly spaced log grid. No smoothing, fitting or peak normalization. "
     "Zero-intensity tails extend as zero; nonzero tails cannot be extrapolated. "
     "Its mean R is calculated from this representative curve; the measurement average is listed separately."
@@ -36,8 +36,12 @@ class DLSMeasurement:
     name: str
     radius: np.ndarray
     intensity: np.ndarray
+    hidden: bool = False
+    excluded: bool = False
 
     def __post_init__(self):
+        if not isinstance(self.hidden, bool) or not isinstance(self.excluded, bool):
+            raise ValueError("Measurement visibility/exclusion flags must be booleans.")
         self.radius = np.asarray(self.radius, dtype=float).copy()
         self.intensity = np.asarray(self.intensity, dtype=float).copy()
         x, y = self.radius, self.intensity
@@ -130,14 +134,16 @@ def distribution_statistics(measurement: DLSMeasurement) -> dict:
 
 
 def measurement_average(particle: DLSParticle) -> dict:
-    stats = [distribution_statistics(m) for m in particle.measurements]
+    stats = [distribution_statistics(m) for m in particle.measurements if not m.excluded]
     # Do not silently omit an all-zero measurement from the reported average.
-    return {key: (float(np.mean([s[key] for s in stats])) if all(s[key] is not None for s in stats) else None)
+    return {key: (float(np.mean([s[key] for s in stats])) if stats and all(s[key] is not None for s in stats) else None)
             for key in ("mean_radius", "mean_diameter", "pd_percent", "sd_radius")}
 
 
 def representative_curve(particle: DLSParticle) -> DLSMeasurement:
-    measurements = particle.measurements
+    measurements = [m for m in particle.measurements if not m.excluded]
+    if not measurements:
+        raise ValueError("No measurements included in analysis.")
     first = measurements[0]
     if all(np.array_equal(m.radius, first.radius) for m in measurements):
         return DLSMeasurement("Representative curve", first.radius, np.mean([m.intensity for m in measurements], axis=0))
@@ -162,24 +168,29 @@ def representative_curve(particle: DLSParticle) -> DLSMeasurement:
 def statistics_rows(particles: list[DLSParticle], include_representative: bool = False) -> list[dict]:
     rows = []
     for particle in particles:
-        rows.append({"particle": particle.name, "measurement": f"Measurement average (n={len(particle.measurements)})",
+        count = sum(not m.excluded for m in particle.measurements)
+        identity = {"particle": particle.name, "particle_uid": particle.uid}
+        rows.append({**identity, "measurement": f"Measurement average (n={count})", "kind": "average",
+                     "included_count": count, "excluded": False, "hidden": False,
                      **measurement_average(particle)})
-        for m in particle.measurements:
-            rows.append({"particle": particle.name, "measurement": m.name, **distribution_statistics(m)})
+        for index, m in enumerate(particle.measurements):
+            rows.append({**identity, "measurement": m.name, "measurement_index": index, "kind": "measurement",
+                         "excluded": m.excluded, "hidden": m.hidden, **distribution_statistics(m)})
         if include_representative:
             try:
                 m = representative_curve(particle)
             except ValueError:
                 continue
-            rows.append({"particle": particle.name, "measurement": m.name, **distribution_statistics(m)})
+            rows.append({**identity, "measurement": m.name, "kind": "representative", "excluded": False,
+                         "hidden": False, **distribution_statistics(m)})
     return rows
 
 
 def statistics_csv(particles, include_representative=False):
     out = StringIO(newline="")
     writer = csv.writer(out)
-    writer.writerow(("Particle", "Measurement", "Mean radius (nm)", "Mean diameter (nm)", "%PD (distribution)", "SD radius (nm)"))
+    writer.writerow(("Particle", "Measurement", "Mean radius (nm)", "Mean diameter (nm)", "%PD (distribution)", "SD radius (nm)", "Excluded from analysis", "Hidden individual curve"))
     for row in statistics_rows(particles, include_representative):
         writer.writerow([row[k] if row[k] is not None else "N/A" for k in
-                         ("particle", "measurement", "mean_radius", "mean_diameter", "pd_percent", "sd_radius")])
+                         ("particle", "measurement", "mean_radius", "mean_diameter", "pd_percent", "sd_radius", "excluded", "hidden")])
     return out.getvalue()

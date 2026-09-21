@@ -7,12 +7,12 @@ from tkinter import font as tkfont, ttk
 import unittest
 from unittest.mock import patch
 
-from matplotlib.backend_bases import MouseEvent
+from matplotlib.backend_bases import MouseEvent, KeyEvent
 import numpy as np
 from PIL import Image
 
 from labplotter.config import SettingsStore
-from labplotter.lab_dls import parse_dls_text
+from labplotter.lab_dls import parse_dls_text, distribution_statistics
 from labplotter.lab_dls_library import DLSLibrary
 from labplotter.lab_dls_ui import LabDLSTab
 
@@ -109,3 +109,100 @@ class LabDLSDesktopTests(unittest.TestCase):
                 self.assertGreaterEqual(results.winfo_rooty(),graph.winfo_rooty()+graph.winfo_height())
         finally:font.configure(size=previous)
         self.assertFalse(self.errors)
+
+    def test_measurement_checkboxes_live_averages_quick_controls_and_collapsed_overlay(self):
+        tab=self.tab;p=self.b
+        self.assertLess(tab.controls.winfo_rootx(),tab.plot.winfo_rootx())
+        tab.tree.selection_set(p.uid);tab.register_overlay();self.settle()
+        result=tab.results['selected'];overlay=tab.results['overlay']
+        tree=overlay.tree
+        self.assertEqual(tree.get_children(),(p.uid,))
+        self.assertFalse(tree.item(p.uid,'open'))
+        self.assertEqual(tree.set(p.uid,'expand'),'+')
+        x,y,w,h=tree.bbox(p.uid,'expand')
+        tree.event_generate('<Button-1>',x=x+w//2,y=y+h//2);self.settle()
+        self.assertTrue(tree.item(p.uid,'open'))
+        self.assertTrue(tree.bbox(tree.get_children(p.uid)[0]))
+        hide=result.checks[('row-1','hidden')]
+        self.assertTrue(hide.winfo_ismapped())
+        hide.invoke();self.settle()
+        self.assertTrue(p.measurements[0].hidden)
+        self.assertEqual(len(tab.curves('selected')[0]),1)
+        self.assertAlmostEqual(result.rows[0]['mean_radius'],73)
+        result.checks[('row-2','excluded')].invoke();self.settle()
+        self.assertEqual(result.rows[0]['included_count'],1)
+        self.assertAlmostEqual(result.rows[0]['mean_radius'],82)
+        self.assertAlmostEqual(distribution_statistics(tab.curves('overlay')[0][0][2])['mean_radius'],82)
+        self.assertTrue(tree.item(p.uid,'open'))  # preserves expansion through recomputation
+        tab.quick_controls['selected']['average'].invoke();self.settle()
+        self.assertEqual(len(tab.curves('selected')[0]),1)
+        self.assertEqual(len(tab.plot.axis.lines),2)
+        self.assertEqual(len(tab.drags['selected'].artists),1)
+        for key in ('selected','overlay'):
+            for field in ('show_labels','show_lines'):
+                before=getattr(tab.extensions[key].style,field)
+                tab.quick_controls[key][field].invoke();self.settle()
+                self.assertEqual(getattr(tab.extensions[key].style,field),not before)
+            tab.drags[key].positions[p.uid+':mean']=(.2,.4)
+            tab.quick_controls[key]['reset'].invoke();self.settle()
+            self.assertFalse(tab.drags[key].positions)
+        result.checks[('row-1','excluded')].invoke();self.settle()
+        self.assertEqual(result.rows[0]['included_count'],0)
+        self.assertIsNone(result.rows[0]['mean_radius'])
+        self.assertEqual(tab.curves('overlay')[0],[])
+        self.assertFalse(self.errors)
+
+    def test_common_legend_click_unlock_move_corner_resize_toggle_and_clean_copy(self):
+        # Noncompact pane is shared by FTIR, ssNMR, NanoDrop and TEM as well.
+        from labplotter.ui import PlotPane
+        from labplotter.plotting import PlotOptions, figure_png_bytes
+        top=tk.Toplevel(self.root);top.geometry('950x660')
+        def draw(ax,opts):
+            for i in range(6):ax.plot([1,2,3],[i,i+1,i+2],label=f'Particle {i+1}')
+        pane=PlotPane(top,draw,PlotOptions(),export_current_view=True)
+        pane.pack(fill='both',expand=True);pane.refresh();self.settle()
+        def mouse(name,x,y):
+            pane.canvas.callbacks.process(name,MouseEvent(name,pane.canvas,x,y,button=1))
+        def drag(x,y,dx,dy):
+            mouse('button_press_event',x,y);mouse('motion_notify_event',x+dx,y+dy);mouse('button_release_event',x+dx,y+dy);self.settle()
+        editor=pane.legend_editor;before=editor.bounds().frozen()
+        drag(before.x0+20,before.y0+15,40,20)
+        self.assertTrue(editor.active)
+        np.testing.assert_allclose(editor.bounds().bounds,before.bounds) # first drag only unlocks
+        drag(before.x0+20,before.y0+15,35,-20)
+        self.assertAlmostEqual(editor.bounds().x0,before.x0+35,delta=2)
+        self.assertAlmostEqual(editor.bounds().y0,before.y0-20,delta=2)
+        before=editor.bounds().frozen()
+        # Widen the upper-right corner: reflow six vertical entries into columns.
+        drag(before.x1,before.y1,350,-before.height/2)
+        self.assertGreater(editor.bounds().width,before.width+200)
+        self.assertGreater(pane._legend_artist._ncols,1)
+        self.assertLess(editor.bounds().height,before.height)
+        frame=editor.bounds().frozen()
+        for label in pane._legend_artist.get_texts():
+            box=label.get_window_extent(pane.canvas.get_renderer())
+            self.assertTrue(frame.padded(2).contains(box.x0,box.y0))
+            self.assertTrue(frame.padded(2).contains(box.x1,box.y1))
+        geometry=(pane.legend_position,pane.legend_size)
+        pane.axis.set_xlim(1.2,2.5)
+        pane.toolbar.legend_button.invoke();self.settle()
+        self.assertIsNone(pane.axis.get_legend())
+        self.assertEqual(pane.axis.get_xlim(),(1.2,2.5))
+        pane.toolbar.legend_button.invoke();self.settle()
+        self.assertEqual((pane.legend_position,pane.legend_size),geometry)
+        bbox=editor.bounds();mouse('button_press_event',bbox.x0+20,bbox.y0+15);mouse('button_release_event',bbox.x0+20,bbox.y0+15)
+        self.settle();self.assertEqual(len(editor.decorations),5)
+        active_png=figure_png_bytes(pane.figure,dpi=130)
+        # Toolbar savefig and Copy graph must both omit the blue edit handles.
+        direct=BytesIO();pane.figure.savefig(direct,format='png',dpi=130)
+        pane.canvas.callbacks.process('key_press_event',KeyEvent('key_press_event',pane.canvas,key='escape'))
+        self.assertFalse(editor.active)
+        clean_png=figure_png_bytes(pane.figure,dpi=130)
+        for data in (active_png,direct.getvalue()):
+            with Image.open(BytesIO(data)) as edited,Image.open(BytesIO(clean_png)) as clean:
+                np.testing.assert_array_equal(np.asarray(edited),np.asarray(clean))
+        pane.refresh();self.settle()
+        self.assertEqual((pane.legend_position,pane.legend_size),geometry)
+        pane.restore_defaults();pane.refresh();self.settle()
+        self.assertIsNone(pane.legend_size);self.assertIsNone(pane.legend_position)
+        top.destroy();self.assertFalse(self.errors)

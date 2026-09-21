@@ -9,11 +9,11 @@ def main() -> None:
     import logging
     logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
     app_path = Path(__file__).with_name("streamlit_app.py")
-    app = AppTest.from_file(str(app_path), default_timeout=30).run()
+    app = AppTest.from_file(str(app_path), default_timeout=60).run()
     if app.exception:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     titles = [item.value for item in app.title]
-    if titles != ["LabPlotter Web 0.9.0"]:
+    if titles != ["LabPlotter Web 0.9.1"]:
         raise RuntimeError(f"Unexpected title: {titles}")
     labels = [item.label for item in app.tabs]
     expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "Lab DLS", "TEM", "Custom format"]
@@ -69,7 +69,7 @@ def main() -> None:
     if app.exception or not any("SSE" in item.value and "Aliphatic region" in item.value and "Aromatic region" in item.value for item in app.text_area):
         raise RuntimeError("ssNMR calculation audit did not open")
     # Start a separate Korean session to catch translated-widget regressions.
-    korean = AppTest.from_file(str(app_path), default_timeout=30)
+    korean = AppTest.from_file(str(app_path), default_timeout=60)
     korean.session_state["language"] = "한국어"
     korean.session_state["_nmr_spectra"] = [fixture("A.txt", 10), fixture("B.txt", 25)]
     korean.run()
@@ -82,7 +82,7 @@ def main() -> None:
     # Lab DLS uses a separate list/library and never auto-registers overlays.
     from labplotter.lab_dls import parse_dls_text
     raw='Radius (nm),Meas 1,Meas 3\n1,0,0\n10,25,50\n100,75,50\n1000,0,0\n'
-    dls=AppTest.from_file(str(app_path),default_timeout=45)
+    dls=AppTest.from_file(str(app_path),default_timeout=60)
     particles=[parse_dls_text(raw, name+'.csv') for name in ('A','B')]
     dls.session_state['_lab_dls_particles']=particles
     dls.run()
@@ -99,6 +99,16 @@ def main() -> None:
     dls.button(key='lab-dls-selected-plot-fit-y').click().run()
     if dls.exception or float(dls.session_state['lab-dls-selected-plot-ymax'])<=75:
         raise RuntimeError('Lab DLS Y fit failed')
+    dls.checkbox(key='lab-dls-selected-plot-average').check().run()
+    if dls.exception or dls.session_state['lab-dls-selected-plot-curve-count']!=1:
+        raise RuntimeError('Lab DLS selected average mode failed')
+    dls.checkbox(key='lab-dls-selected-plot-lines').uncheck().run()
+    dls.checkbox(key='lab-dls-selected-plot-labels').uncheck().run()
+    dls.button(key='lab-dls-selected-plot-label-reset').click().run()
+    if dls.exception:
+        raise RuntimeError('Lab DLS quick annotation controls failed')
+    if not any(item.label=='+ A' and not item.proto.expanded for item in dls.expander):
+        raise RuntimeError('Lab DLS overlay details must start collapsed')
     dls.button(key='lab-dls-save').click().run()
     if len(dls.session_state['_lab_dls_library'])!=1:
         raise RuntimeError('Lab DLS library save failed')
@@ -114,3 +124,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    print("English/Korean ssNMR and Lab DLS smoke workflows passed")

@@ -1,4 +1,4 @@
-"""Desktop Lab DLS workspace: two plots on the left, explicit lists on the right."""
+"""Desktop Lab DLS workspace: left-side data list, two plots and live measurement controls."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -40,28 +40,115 @@ def scroll_tree(parent, columns, height=5, selectmode="extended"):
 
 
 class DLSResults(ttk.Frame):
-    def __init__(self, parent, show_particle=True):
+    """Native per-row checkbuttons; collapsible per-particle overlay summaries."""
+    def __init__(self, parent, show_particle=True, on_measurement_changed=None):
         super().__init__(parent)
         self.show_particle = show_particle
-        columns = (("measurement", "Measurement", 160), ("mean_radius", "Mean R (nm)", 90),
-                   ("mean_diameter", "Mean D (nm)", 90), ("pd_percent", "%PD", 80))
+        self.on_measurement_changed = on_measurement_changed
+        self.checks, self.check_vars = {}, {}
+        self._check_job = None
+        columns = (("measurement", "Measurement", 170), ("mean_radius", "Mean R (nm)", 92),
+                   ("mean_diameter", "Mean D (nm)", 92), ("pd_percent", "%PD", 75))
         if show_particle:
-            columns = (("particle", "Particle", 135),) + columns
+            columns = (("expand", "+ / -", 45), ("particle", "Particle", 135)) + columns
+        else:
+            columns = (("hidden", "Hide", 62), ("excluded", "Exclude", 68)) + columns
         box, self.tree = scroll_tree(self, columns, height=4, selectmode="browse")
+        if show_particle:
+            self.tree.column("expand", width=45, minwidth=40, stretch=False)
+            self.tree.bind("<Button-1>", self._expand_click)
+            self.tree.bind("<Return>", self._expand_key)
+            self.tree.bind("<space>", self._expand_key)
+        else:
+            for col in ("hidden", "excluded"):
+                self.tree.column(col, minwidth=55, stretch=False)
+            scrollbars = [w for w in box.winfo_children() if isinstance(w, ttk.Scrollbar)]
+            vs = next(w for w in scrollbars if str(w.cget("orient"))=="vertical")
+            hs = next(w for w in scrollbars if str(w.cget("orient"))=="horizontal")
+            self.tree.configure(yscrollcommand=lambda a,b: (vs.set(a,b), self._schedule_checks()),
+                                xscrollcommand=lambda a,b: (hs.set(a,b), self._schedule_checks()))
+            for event in ("<Configure>", "<ButtonRelease-1>", "<B1-Motion>", "<<TreeviewSelect>>"):
+                self.tree.bind(event, self._schedule_checks, add=True)
+        self.tree.tag_configure("excluded", foreground="#858585")
         box.pack(fill="both", expand=True)
-        ttk.Label(self, text=tr("CSV intensity-weighted distribution; all exported bins."), wraplength=430).pack(anchor="w", pady=3)
+        note = "Averages use included measurements. Hide only affects individual curves." if not show_particle else "Particle averages; expand + for individual measurements."
+        ttk.Label(self, text=tr(note), wraplength=530).pack(anchor="w", pady=3)
         self.rows = []
+        self.bind("<Destroy>", self._destroy_checks, add=True)
+
+    def _destroy_checks(self, event):
+        if event.widget is self and self._check_job is not None:
+            self.after_cancel(self._check_job); self._check_job = None
+
+    def _schedule_checks(self, _event=None):
+        if self._check_job is None:
+            self._check_job = self.after_idle(self._place_checks)
+
+    def _place_checks(self):
+        self._check_job = None
+        for (iid, col), button in self.checks.items():
+            bounds = self.tree.bbox(iid, col)
+            if bounds and bounds[0]>=0 and bounds[0]+bounds[2]<=self.tree.winfo_width():
+                x,y,w,h = bounds
+                button.place(x=x+(w-24)//2, y=y+1, width=24, height=h-2)
+            else:
+                button.place_forget()
+
+    def _expand_click(self, event):
+        iid = self.tree.identify_row(event.y)
+        if self.tree.identify_column(event.x)=="#1" and iid and self.tree.parent(iid)=="":
+            self.toggle_particle(iid)
+            return "break"
+
+    def _expand_key(self, _event):
+        selected = self.tree.selection()
+        if selected and self.tree.parent(selected[0])=="":
+            self.toggle_particle(selected[0])
+        return "break"
+
+    def toggle_particle(self, iid):
+        opened = not bool(self.tree.item(iid, "open"))
+        self.tree.item(iid, open=opened)
+        self.tree.set(iid, "expand", "-" if opened else "+")
 
     def update_particles(self, particles, representative=False):
+        opened = {iid for iid in self.tree.get_children() if self.tree.item(iid,"open")}
+        yview = self.tree.yview()
         self.rows = statistics_rows(particles, representative)
+        for button in self.checks.values():
+            button.destroy()
+        self.checks.clear(); self.check_vars.clear()
         self.tree.delete(*self.tree.get_children())
-        for row in self.rows:
-            values = [tr("Measurement average (n={n})", n=row["measurement"].split("=")[-1].rstrip(")"))
-                      if row["measurement"].startswith("Measurement average") else tr(row["measurement"])]
+        for index, row in enumerate(self.rows):
+            uid, kind = row["particle_uid"], row["kind"]
+            label = tr("Average (n={n})", n=row["included_count"]) if kind=="average" else tr(row["measurement"])
+            if row["excluded"]:
+                label += " " + tr("[excluded]")
+            values = [label, *["N/A" if row[k] is None else f"{row[k]:.4f}" for k in ("mean_radius","mean_diameter","pd_percent")]]
+            tags = ("excluded",) if row["excluded"] else ()
             if self.show_particle:
-                values.insert(0, row["particle"])
-            values += ["N/A" if row[k] is None else f"{row[k]:.4f}" for k in ("mean_radius", "mean_diameter", "pd_percent")]
-            self.tree.insert("", "end", values=values)
+                # One arithmetic mean per particle at the top level. Raw
+                # measurement rows remain available under a collapsed parent.
+                if kind=="representative":
+                    continue
+                if kind=="average":
+                    self.tree.insert("", "end", iid=uid, values=["-" if uid in opened else "+", row["particle"], *values], open=uid in opened)
+                else:
+                    self.tree.insert(uid, "end", iid=f"{uid}:{row['measurement_index']}", values=["", "", *values], tags=tags)
+            else:
+                iid = f"row-{index}"
+                self.tree.insert("", "end", iid=iid, values=["", "", *values], tags=tags)
+                if kind=="measurement":
+                    mi = row["measurement_index"]
+                    for col in ("hidden", "excluded"):
+                        var = tk.BooleanVar(value=row[col]); self.check_vars[(mi,col)] = var
+                        button = ttk.Checkbutton(self.tree, variable=var,
+                            command=lambda u=uid, i=mi, c=col, v=var: self.on_measurement_changed(u,i,c,v.get()))
+                        self.checks[(iid,col)] = button
+        if yview:
+            self.tree.yview_moveto(yview[0])
+        if not self.show_particle:
+            self._schedule_checks()
 
 
 class DLSSettings:
@@ -206,16 +293,19 @@ class LabDLSTab(ttk.Frame):
         self.current_uid = None
         self.library_window = None
         self.all_measurements = tk.BooleanVar(value=False)
+        self.average_selected = tk.BooleanVar(value=False)
+        self.quick_controls = {}
         self.status = tk.StringVar()
         self.panes, self.results, self.drags, self.extensions, self.notices = {}, {}, {}, {}, {}
         workspace = ttk.Panedwindow(self, orient="horizontal"); workspace.pack(fill="both", expand=True)
         graphs = ttk.Panedwindow(workspace, orient="horizontal")
         controls = ttk.Frame(workspace, padding=6, width=310)
-        workspace.add(graphs, weight=4); workspace.add(controls, weight=1)
+        workspace.add(controls, weight=1); workspace.add(graphs, weight=4)
+        self.workspace, self.controls = workspace, controls
         self._initial_layout_complete = False
         def initialize_layout(_event=None):
             if not self._initial_layout_complete and workspace.winfo_width() > 800:
-                workspace.sashpos(0, workspace.winfo_width() - 315)
+                workspace.sashpos(0, 300)
                 self._initial_layout_complete = True
         workspace.bind("<Configure>", initialize_layout)
         for key, title in (("selected", "Selected particle"), ("overlay", "Particle overlay")):
@@ -233,9 +323,23 @@ class LabDLSTab(ttk.Frame):
             for label, command in (("Fit Y axis", lambda k=key: self.fit_y(k)),
                                    ("Calculation method…", self.show_method), ("Export results…", lambda k=key: self.export_results(k))):
                 ttk.Button(actions, text=tr(label), command=command).pack(side="left", padx=2)
+            quick = ttk.Frame(bottom); quick.pack(fill="x", pady=3)
+            extension = self.extensions[key]
+            self.quick_controls[key] = {}
+            for i, (label, field) in enumerate((("Mean R labels", "show_labels"), ("Mean lines", "show_lines"))):
+                button = ttk.Checkbutton(quick, text=tr(label), variable=extension.vars[field], command=extension.apply)
+                button.grid(row=0, column=i, sticky="w", padx=2)
+                self.quick_controls[key][field] = button
+            reset = ttk.Button(quick, text=tr("Reset mean R label positions"), command=self.drags[key].reset)
+            reset.grid(row=2, column=0, columnspan=2, sticky="w", padx=2, pady=2)
+            self.quick_controls[key]["reset"] = reset
+            if key=="selected":
+                button = ttk.Checkbutton(quick, text=tr("Average distribution only"), variable=self.average_selected, command=self.refresh_selected)
+                button.grid(row=1, column=0, columnspan=2, sticky="w", padx=2)
+                self.quick_controls[key]["average"] = button
             self.notices[key] = ttk.Label(bottom, wraplength=430, foreground="#875000")
             self.notices[key].pack(fill="x")
-            self.results[key] = DLSResults(bottom, show_particle=key=="overlay"); self.results[key].pack(fill="both", expand=True)
+            self.results[key] = DLSResults(bottom, show_particle=key=="overlay", on_measurement_changed=self.set_measurement_state); self.results[key].pack(fill="both", expand=True)
         self.plot = self.panes["selected"]
         self.plot_panes = tuple(self.panes.values())
         ttk.Button(controls, text=tr("Import Lab DLS CSV…"), command=self.import_dialog).pack(fill="x", pady=2)
@@ -265,7 +369,7 @@ class LabDLSTab(ttk.Frame):
         return [self.particles[uid] for uid in self.overlay_ids if uid in self.particles]
 
     def curves(self, key):
-        return plot_series(self.displayed(key), overlay=key=="overlay", all_measurements=self.all_measurements.get())
+        return plot_series(self.displayed(key), overlay=key=="overlay", all_measurements=self.all_measurements.get(), average=key=="selected" and self.average_selected.get())
 
     def _draw(self, key, axis, options):
         curves, errors = self.curves(key)
@@ -273,7 +377,8 @@ class LabDLSTab(ttk.Frame):
         labels = draw_dls(axis, options, curves, extension.style, self.drags[key].positions, extension.colors)
         self.drags[key].set_artists(labels)
         if not curves:
-            axis.text(.5, .45, tr("Register particles with the overlay button." if key=="overlay" else "Import a CSV and select a particle."),
+            text = "No visible measurements. Check Hide / Exclude." if self.displayed(key) else ("Register particles with the overlay button." if key=="overlay" else "Import a CSV and select a particle.")
+            axis.text(.5, .45, tr(text),
                       transform=axis.transAxes, ha="center", va="center", wrap=True)
         ymax = options.y_max
         clipped = ymax is not None and any(float(c[2].intensity.max()) > ymax for c in curves)
@@ -286,7 +391,7 @@ class LabDLSTab(ttk.Frame):
         self.refresh_selected(); self.refresh_overlay()
 
     def refresh_selected(self):
-        self.plot.refresh(); self.results["selected"].update_particles(self.displayed("selected"))
+        self.plot.refresh(); self.results["selected"].update_particles(self.displayed("selected"), representative=self.average_selected.get())
 
     def refresh_overlay(self):
         selection = self.overlay_tree.selection()
@@ -359,6 +464,12 @@ class LabDLSTab(ttk.Frame):
             self.tree.selection_set(self.current_uid); self.tree.focus(self.current_uid)
         self._refresh()
 
+    def set_measurement_state(self, uid, index, field, value):
+        if field not in ("hidden", "excluded"):
+            raise ValueError("Unknown measurement setting")
+        setattr(self.particles[uid].measurements[index], field, bool(value))
+        self._refresh()
+
     def register_overlay(self):
         for uid in self.tree.selection():
             if uid not in self.overlay_ids:
@@ -389,4 +500,4 @@ class LabDLSTab(ttk.Frame):
     def export_results(self, key):
         path = filedialog.asksaveasfilename(parent=self, defaultextension=".csv", initialfile="Lab_DLS_results.csv", filetypes=(("CSV", "*.csv"),))
         if path:
-            Path(path).write_text(statistics_csv(self.displayed(key), key=="overlay" and not self.all_measurements.get()), encoding="utf-8-sig")
+            Path(path).write_text(statistics_csv(self.displayed(key), (key=="overlay" and not self.all_measurements.get()) or (key=="selected" and self.average_selected.get())), encoding="utf-8-sig")

@@ -170,7 +170,7 @@ class PlotSettingsWindow(tk.Toplevel):
         if getattr(self.pane, "draggable_legend", False):
             ttk.Label(
                 parent,
-                text="Drag the legend directly on the graph to move it. Its position is saved automatically.",
+                text="Click the legend to edit it. Drag inside to move, or a corner to resize. Click outside or press Esc to finish.",
                 foreground="#0B5CAD",
                 wraplength=620,
             ).pack(anchor="w", pady=(0, 6))

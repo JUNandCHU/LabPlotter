@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from io import BytesIO
 import tempfile
+import json
 from pathlib import Path
 import unittest
 
@@ -100,6 +101,47 @@ class LabDLSCoreTests(unittest.TestCase):
         self.assertEqual([p.uid for p in restored],[a.uid,b.uid])
         np.testing.assert_array_equal(restored[1].measurements[1].radius,b.measurements[1].radius)
         with self.assertRaises(ValueError):import_dls_library(export_dls_library([a,a]))
+
+    def test_hide_is_visual_exclude_changes_all_averages_and_is_reversible(self):
+        p=fixture();original=deepcopy(p)
+        original_mean=representative_curve(p)
+        p.measurements[0].hidden=True
+        self.assertEqual(len(plot_series([p])[0]),1)
+        self.assertEqual(measurement_average(p),measurement_average(original))
+        np.testing.assert_array_equal(representative_curve(p).intensity,original_mean.intensity)
+        self.assertEqual(len(plot_series([p],average=True)[0]),1)
+        p.measurements[1].excluded=True
+        self.assertEqual(measurement_average(p),distribution_statistics(p.measurements[0]))
+        np.testing.assert_array_equal(plot_series([p],overlay=True)[0][0][2].intensity,p.measurements[0].intensity)
+        rows=statistics_rows([p],True)
+        self.assertEqual(rows[0]['included_count'],1)
+        self.assertTrue(rows[2]['excluded'])
+        p.measurements[0].excluded=True
+        self.assertIsNone(measurement_average(p)['mean_radius'])
+        self.assertEqual(statistics_rows([p])[0]['included_count'],0)
+        self.assertEqual(plot_series([p],overlay=True)[0],[])
+        for m in p.measurements:m.hidden=False;m.excluded=False
+        self.assertEqual(measurement_average(p),measurement_average(original))
+        for a,b in zip(p.measurements,original.measurements):
+            np.testing.assert_array_equal(a.intensity,b.intensity)
+
+    def test_measurement_state_roundtrips_without_breaking_old_libraries(self):
+        p=fixture();p.measurements[0].hidden=True;p.measurements[1].excluded=True
+        with tempfile.TemporaryDirectory() as tmp:
+            lib=DLSLibrary(Path(tmp)/'library.sqlite3');lib.save(p)
+            restored=lib.load(p.uid)
+            self.assertTrue(restored.measurements[0].hidden)
+            self.assertTrue(restored.measurements[1].excluded)
+            # A genuine 0.9.0 NPZ payload has only x/y arrays.
+            buf=BytesIO();np.savez_compressed(buf,**{key+str(i):v for i,m in enumerate(p.measurements) for key,v in (('x',m.radius),('y',m.intensity))})
+            with lib._connect() as db:
+                db.execute('UPDATE particles SET arrays=?',(buf.getvalue(),))
+            self.assertTrue(all(not m.hidden and not m.excluded for m in lib.load(p.uid).measurements))
+        payload=export_dls_library([p]);restored=import_dls_library(payload)[0]
+        self.assertTrue(restored.measurements[0].hidden);self.assertTrue(restored.measurements[1].excluded)
+        legacy=json.loads(payload)
+        for m in legacy['particles'][0]['measurements']:m.pop('hidden');m.pop('excluded')
+        self.assertTrue(all(not m.hidden and not m.excluded for m in import_dls_library(json.dumps(legacy))[0].measurements))
 
     def test_plot_pdf_limits_overlay_palette_and_exact_export_frame(self):
         particles=[fixture(str(i)) for i in range(7)]

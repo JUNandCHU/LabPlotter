@@ -209,12 +209,16 @@ class HoverTooltip:
 
 
 class LocalizedNavigationToolbar(NavigationToolbar2Tk):
-    def __init__(self, canvas, window, pack_toolbar=False):
+    def __init__(self, canvas, window, pack_toolbar=False, pane=None):
         self.toolitems = tuple(
             (tr(text), tr(tooltip), image, method)
             for text, tooltip, image, method in NavigationToolbar2Tk.toolitems
         )
         super().__init__(canvas, window, pack_toolbar=pack_toolbar)
+        if pane is not None:
+            self.legend_button = ttk.Checkbutton(self, text=tr("Legend"),
+                variable=pane.vars["legend"], command=pane.toggle_legend)
+            self.legend_button.pack(side="left", padx=4)
 
 
 class PlotPane(ttk.Frame):
@@ -234,11 +238,11 @@ class PlotPane(ttk.Frame):
         self.options = options
         self.default_options = deepcopy(options)
         self.compact = compact
-        self.draggable_legend = draggable_legend
+        self.draggable_legend = True
         self.legend_position = legend_position
+        self.legend_size = None
         self.legend_position_changed = legend_position_changed
         self._legend_artist = None
-        self._legend_drag_started = False
         self.figure = Figure(figsize=(8.5, 6.2), dpi=100)
         self.export_current_view = export_current_view
         self.figure._labplotter_export_current_view = export_current_view
@@ -275,7 +279,6 @@ class PlotPane(ttk.Frame):
         self.overlay_artists = []
         self._pending_annotation = None
         self._drawing_start = None
-        self._rebuild_toolbar()
         self.canvas_host.pack(fill="both", expand=True)
         self.canvas.get_tk_widget().place(x=0, y=0, relwidth=1, relheight=1)
         self._layout_job = None
@@ -321,10 +324,11 @@ class PlotPane(ttk.Frame):
             "x_tick": tk.StringVar(value="" if options.x_tick is None else str(options.x_tick)),
             "y_tick": tk.StringVar(value="" if options.y_tick is None else str(options.y_tick)),
         }
+        self._rebuild_toolbar()
+        from .legend_editor import LegendEditor
+        self.legend_editor = LegendEditor(self)
         self.canvas.mpl_connect("button_press_event", self._annotation_press)
         self.canvas.mpl_connect("button_release_event", self._annotation_release)
-        self.canvas.mpl_connect("button_press_event", self._legend_press)
-        self.canvas.mpl_connect("button_release_event", self._legend_release)
 
     def _resize_canvas(self, _event=None):
         width, height = self.canvas_host.winfo_width(), self.canvas_host.winfo_height()
@@ -373,9 +377,14 @@ class PlotPane(ttk.Frame):
     def _rebuild_toolbar(self):
         if self.toolbar is not None:
             self.toolbar.destroy()
-        self.toolbar = LocalizedNavigationToolbar(self.canvas, self.toolbar_frame, pack_toolbar=False)
+        self.toolbar = LocalizedNavigationToolbar(self.canvas, self.toolbar_frame, pack_toolbar=False, pane=self)
         self.toolbar.update()
         self.toolbar.pack(side="left")
+
+    def toggle_legend(self):
+        self.options.legend = self.vars["legend"].get()
+        self._create_legend()
+        self.canvas.draw_idle()
 
     def set_labels(self, x_name: str, x_unit: str, y_name: str, y_unit: str):
         for key, value in (("x_label", x_name), ("x_unit", x_unit), ("y_label", y_name), ("y_unit", y_unit)):
@@ -418,8 +427,7 @@ class PlotPane(ttk.Frame):
 
     def refresh(self):
         self._read_options()
-        if self._legend_artist is not None:
-            self._legend_artist.set_draggable(False)
+        self.legend_editor.attach(None)
         self.axis.clear()
         self.axis.set_prop_cycle(color=SERIES_PALETTE)
         self._legend_artist = None
@@ -436,10 +444,16 @@ class PlotPane(ttk.Frame):
             messagebox.showerror(tr("Plot error"), str(exc), parent=self)
 
     def _create_legend(self):
+        from .legend_editor import resize_legend
+        previous = self.axis.get_legend()
+        if previous is not None:
+            previous.remove()
         handles, labels = self.axis.get_legend_handles_labels()
         if not self.options.legend or not handles:
             if hasattr(self, "_legend_artist"):
                 self._legend_artist = None
+            if hasattr(self, "legend_editor"):
+                self.legend_editor.attach(None)
             return None
         ink = "#E8E8E8" if self.options.background == "Dark" else "black"
         saved_position = getattr(self, "legend_position", None)
@@ -449,6 +463,7 @@ class PlotPane(ttk.Frame):
                 "loc": "lower left",
                 "bbox_to_anchor": saved_position,
                 "bbox_transform": self.axis.transAxes,
+                "borderaxespad": 0,
             }
         if self.compact:
             maximum = 8
@@ -457,12 +472,9 @@ class PlotPane(ttk.Frame):
             if hidden:
                 handles.append(Line2D([], [], color="none", linewidth=0))
                 labels.append(tr("+ {count} more · see Series colors", count=hidden))
-            legend = self.axis.legend(
-                handles,
-                labels,
+            kwargs = dict(
                 frameon=True,
                 framealpha=0.82,
-                **placement,
                 ncol=2 if len(labels) > 4 else 1,
                 fontsize=max(7.0, min(float(self.options.legend_font_size), 9.0)),
                 borderaxespad=0.35,
@@ -471,59 +483,26 @@ class PlotPane(ttk.Frame):
                 handletextpad=0.45,
                 labelspacing=0.35,
             )
-            # A large legend must never participate in tight-layout sizing:
-            # it may overlay the graph, but it cannot collapse the data axes.
-            legend.set_in_layout(False)
         else:
-            legend = self.axis.legend(frameon=False, fontsize=self.options.legend_font_size, **placement)
-        for text in legend.get_texts():
-            text.set_color(self.options.legend_color or ink)
-            text.set_fontfamily(font_family_for_text(self.options.legend_font_family or "Arial", text.get_text()))
-            text.set_fontweight("bold" if self.options.legend_bold else "normal")
-        if getattr(self, "draggable_legend", False):
-            legend.set_draggable(True, use_blit=False, update="loc")
+            kwargs = dict(frameon=False, fontsize=self.options.legend_font_size)
+        def style_text(legend):
+            for text in legend.get_texts():
+                text.set_color(self.options.legend_color or ink)
+                text.set_fontfamily(font_family_for_text(self.options.legend_font_family or "Arial", text.get_text()))
+                text.set_fontweight("bold" if self.options.legend_bold else "normal")
+        size = getattr(self, "legend_size", None)
+        if size is not None and saved_position is not None:
+            legend, self.legend_size = resize_legend(self.axis, handles, labels, kwargs, saved_position, size, style_text)
+        else:
+            legend = self.axis.legend(handles, labels, **{**kwargs, **placement})
+            style_text(legend)
+        # Legends overlay the data, without collapsing axes under tight_layout.
+        legend.set_in_layout(False)
         if hasattr(self, "_legend_artist"):
             self._legend_artist = legend
+        if hasattr(self, "legend_editor"):
+            self.legend_editor.attach(legend)
         return legend
-
-    def _legend_press(self, event):
-        """Remember presses inside a draggable legend without stealing graph tools."""
-        self._legend_drag_started = False
-        legend = self._legend_artist
-        if not self.draggable_legend or legend is None or event.button != 1:
-            return
-        try:
-            self._legend_drag_started = bool(legend.contains(event)[0])
-        except (AttributeError, RuntimeError):
-            self._legend_drag_started = False
-
-    def _legend_release(self, _event):
-        if not self._legend_drag_started:
-            return
-        self._legend_drag_started = False
-        # Matplotlib finalizes DraggableLegend on the same release event.  Run
-        # after Tk returns to its event loop so we store the finalized position.
-        try:
-            self.after_idle(self._capture_legend_position)
-        except tk.TclError:
-            pass
-
-    def _capture_legend_position(self):
-        legend = self._legend_artist
-        if not self.draggable_legend or legend is None:
-            return
-        try:
-            self.canvas.draw()
-            bounds = legend.get_window_extent(renderer=self.canvas.get_renderer())
-            x, y = self.axis.transAxes.inverted().transform((bounds.x0, bounds.y0))
-        except (AttributeError, RuntimeError, ValueError):
-            return
-        position = (round(float(x), 6), round(float(y), 6))
-        if not all(math.isfinite(value) for value in position):
-            return
-        self.legend_position = position
-        if self.legend_position_changed is not None:
-            self.legend_position_changed(position)
 
     def register_overlay(self, artist):
         """Register an automatic label that follows annotation export visibility."""
@@ -575,6 +554,8 @@ class PlotPane(ttk.Frame):
             self.vars[key].set(value)
         if self.draggable_legend:
             self.legend_position = None
+            self.legend_size = None
+            self.legend_editor.deactivate()
             if self.legend_position_changed is not None:
                 self.legend_position_changed(None)
 
