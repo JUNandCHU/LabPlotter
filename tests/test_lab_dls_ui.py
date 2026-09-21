@@ -189,7 +189,9 @@ class LabDLSDesktopTests(unittest.TestCase):
         self.assertIsNone(pane.axis.get_legend())
         self.assertEqual(pane.axis.get_xlim(),(1.2,2.5))
         pane.toolbar.legend_button.invoke();self.settle()
-        self.assertEqual((pane.legend_position,pane.legend_size),geometry)
+        # Axes/display transforms can round-trip with a few ULPs of error.
+        # 1e-12 axes units is far below a pixel, while still catching any movement.
+        np.testing.assert_allclose((pane.legend_position,pane.legend_size),geometry,rtol=0,atol=1e-12)
         bbox=editor.bounds();mouse('button_press_event',bbox.x0+20,bbox.y0+15);mouse('button_release_event',bbox.x0+20,bbox.y0+15)
         self.settle();self.assertEqual(len(editor.decorations),5)
         active_png=figure_png_bytes(pane.figure,dpi=130)
@@ -202,7 +204,7 @@ class LabDLSDesktopTests(unittest.TestCase):
             with Image.open(BytesIO(data)) as edited,Image.open(BytesIO(clean_png)) as clean:
                 np.testing.assert_array_equal(np.asarray(edited),np.asarray(clean))
         pane.refresh();self.settle()
-        self.assertEqual((pane.legend_position,pane.legend_size),geometry)
+        np.testing.assert_allclose((pane.legend_position,pane.legend_size),geometry,rtol=0,atol=1e-12)
         pane.restore_defaults();pane.refresh();self.settle()
         self.assertIsNone(pane.legend_size);self.assertIsNone(pane.legend_position)
         top.destroy();self.assertFalse(self.errors)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from copy import deepcopy
 from io import BytesIO
 import tempfile
@@ -134,7 +135,9 @@ class LabDLSCoreTests(unittest.TestCase):
             self.assertTrue(restored.measurements[1].excluded)
             # A genuine 0.9.0 NPZ payload has only x/y arrays.
             buf=BytesIO();np.savez_compressed(buf,**{key+str(i):v for i,m in enumerate(p.measurements) for key,v in (('x',m.radius),('y',m.intensity))})
-            with lib._connect() as db:
+            # A connection context commits the transaction but does not close
+            # SQLite's file handle; Windows cannot remove the temp DB until it closes.
+            with closing(lib._connect()) as db, db:
                 db.execute('UPDATE particles SET arrays=?',(buf.getvalue(),))
             self.assertTrue(all(not m.hidden and not m.excluded for m in lib.load(p.uid).measurements))
         payload=export_dls_library([p]);restored=import_dls_library(payload)[0]
