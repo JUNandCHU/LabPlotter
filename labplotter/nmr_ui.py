@@ -9,8 +9,9 @@ import numpy as np
 from .i18n import tr
 from .models import Spectrum
 from .nmr import (PHASE_NOTE, ComparisonSettings, default_settings, parse_topspin_ascii,
-                  preprocess_pair, comparison_metrics, comparison_region_metrics, regional_metrics_audit, integral_ratios,
+                  preprocess_pair, regional_metrics_audit, regional_preprocessing_audit,
                   integrals_audit, preprocessing_audit, comparison_csv)
+from .nmr_comparison import ComparisonSession
 from .nmr_library import NMRLibrary
 from .plotting import PlotOptions, SERIES_PALETTE
 
@@ -38,12 +39,12 @@ def nmr_tree_style(parent):
 
 
 class AuditWindow(tk.Toplevel):
-    def __init__(self, parent, title, calculation, result):
+    def __init__(self, parent, title, calculation, result, preprocessing=None):
         super().__init__(parent)
         self.title(tr(title)); self.geometry("1050x720")
         book = ttk.Notebook(self); book.pack(fill="both", expand=True, padx=8, pady=8)
         for label, content, filename in (("Calculation details", calculation, "ssNMR_calculation.txt"),
-                                          ("Preprocessing audit", preprocessing_audit(result), "ssNMR_preprocessing.txt")):
+                                          ("Preprocessing audit", preprocessing if preprocessing is not None else preprocessing_audit(result), "ssNMR_preprocessing.txt")):
             page = ttk.Frame(book); book.add(page, text=tr(label))
             ttk.Button(page, text=tr("Save complete audit…"), command=lambda c=content, f=filename: save_text(self, c, f)).pack(anchor="w", pady=4)
             text = ScrolledText(page, wrap="none", font=("TkFixedFont", 10))
@@ -107,9 +108,12 @@ class ComparisonWindow(tk.Toplevel):
         from .ui import PlotPane
         super().__init__(parent)
         self.title(tr("Spectrum comparison")); self.geometry("1250x900"); self.minsize(950, 720)
-        self.a_raw, self.b_raw, self.result = a, b, result
+        self.session = ComparisonSession(a, b, result)
+        self.a_raw, self.b_raw, self.result = self.session.a_raw, self.session.b_raw, result
         self.metrics = self.ratios = None
         self.region_metrics = {}
+        self.region_results = {}
+        self.integral_result = None
         self._recalc_job = None
         self.bind("<Destroy>", self._cancel_recalculation, add=True)
         self.rowconfigure(1, weight=1); self.columnconfigure(0, weight=1)
@@ -123,18 +127,20 @@ class ComparisonWindow(tk.Toplevel):
         self.plot.grid(row=1, column=0, sticky="nsew", padx=8)
         lower = ttk.LabelFrame(self, text=tr("Comparison results"), padding=8); lower.grid(row=2, column=0, sticky="ew", padx=8, pady=8)
         region_buttons = ttk.Frame(lower); region_buttons.pack(fill="x", pady=(0,6))
-        ttk.Label(region_buttons, text=tr("View region")+":").pack(side="left", padx=(0,6))
-        for label, low_key, high_key in (("Aliphatic region", "alow", "ahigh"), ("Aromatic region", "rlow", "rhigh")):
+        ttk.Label(region_buttons, text=tr("Reprocess region")+":").pack(side="left", padx=(0,6))
+        for label, low_key, high_key in (("Aliphatic region", "alow", "ahigh"), ("Aromatic region", "rlow", "rhigh"),
+                                       ("Custom region", "clow", "chigh")):
             ttk.Button(region_buttons, text=tr(label),
                        command=lambda lo=low_key, hi=high_key: self.show_region(lo, hi)).pack(side="left", padx=(0,6))
         bounds = ttk.Frame(lower); bounds.pack(fill="x")
         self.fields = {}
         for label, key, value in (("Comparison min", "low", result.x[0]), ("Comparison max", "high", result.x[-1]),
                                    ("Aliphatic min", "alow", 0), ("Aliphatic max", "ahigh", 50),
-                                   ("Aromatic min", "rlow", 90), ("Aromatic max", "rhigh", 160)):
+                                   ("Aromatic min", "rlow", 90), ("Aromatic max", "rhigh", 160),
+                                   ("Custom min", "clow", 0), ("Custom max", "chigh", 200)):
             i = len(self.fields)
-            box = ttk.Frame(bounds); box.grid(row=i//3, column=i%3, sticky="ew", padx=(0,12), pady=2)
-            bounds.columnconfigure(i%3, weight=1)
+            box = ttk.Frame(bounds); box.grid(row=i//2, column=i%2, sticky="ew", padx=(0,12), pady=2)
+            bounds.columnconfigure(i%2, weight=1)
             ttk.Label(box, text=tr(label)+" (ppm)").pack(side="left")
             var = tk.StringVar(value=f"{value:.10g}"); self.fields[key] = var
             ttk.Entry(box, textvariable=var, width=13).pack(side="right")
@@ -145,19 +151,23 @@ class ComparisonWindow(tk.Toplevel):
         self.metric_text = tk.StringVar(); self.integral_text = tk.StringVar()
         ttk.Label(lower, textvariable=self.metric_text, wraplength=1130, font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=4)
         ttk.Label(lower, textvariable=self.integral_text, wraplength=1130).pack(anchor="w", pady=3)
+        ttk.Label(lower, text=tr("Region statistics use separate preprocessing. Integral ratios use one shared preprocessing result for both regions."), wraplength=1130, foreground="#555555").pack(anchor="w")
         ttk.Label(lower, text=tr("R²: direct agreement with reference A (no fitted scaling). r²: squared Pearson r. Integrals use processed signed intensities and exact region boundaries."), wraplength=1130, foreground="#555555").pack(anchor="w", pady=3)
-        for var in self.fields.values():
-            var.trace_add("write", self._invalidate)
+        for key, var in self.fields.items():
+            if key not in ('clow', 'chigh'):
+                var.trace_add("write", self._invalidate)
         self._process_status(); self.calculate()
 
     def show_region(self, low_key, high_key):
         low, high = self.fields[low_key].get(), self.fields[high_key].get()
         try:
-            comparison_metrics(self.result, float(low), float(high))
-        except (ValueError, TypeError):
-            messagebox.showerror(tr("Comparison range"), tr("The selected region needs increasing numeric bounds and at least three common measured points."), parent=self)
+            result = self.session.select_region(low, high)
+        except (ValueError, TypeError) as exc:
+            messagebox.showerror(tr("ssNMR preprocessing"), str(exc), parent=self)
             return
+        self.result = result
         self.fields['low'].set(low); self.fields['high'].set(high)
+        self._process_status()
         self.calculate()
 
     def _invalidate(self, *_):
@@ -176,7 +186,7 @@ class ComparisonWindow(tk.Toplevel):
     def _process_status(self):
         r = self.result
         limit = " — " + tr("Alignment reached the shift limit; inspect the overlay.") if r.log['alignment'].get('at_limit') else ""
-        self.process_label.configure(text=f"{tr('Applied B shift')}: {r.log['alignment']['B_shift_added_ppm']:+.6g} ppm | {tr('Grid')}: {len(r.x):,} / {r.log['actual_grid_step_ppm']:.6g} ppm | Gaussian FWHM: {r.settings.gaussian_fwhm_ppm:g} ppm | {tr(r.settings.normalization)}{limit}\n{tr(PHASE_NOTE)}")
+        self.process_label.configure(text=f"{tr('Processing range')}: {r.settings.ppm_min:g}–{r.settings.ppm_max:g} ppm | {tr('Applied B shift')}: {r.log['alignment']['B_shift_added_ppm']:+.6g} ppm | {tr('Grid')}: {len(r.x):,} / {r.log['actual_grid_step_ppm']:.6g} ppm | Gaussian FWHM: {r.settings.gaussian_fwhm_ppm:g} ppm | {tr(r.settings.normalization)}{limit}\n{tr(PHASE_NOTE)}")
         self.plot.vars['y_unit'].set('a.u.' if r.settings.normalization == 'None' else 'normalized a.u.')
 
     def _draw(self, axis, options):
@@ -196,7 +206,7 @@ class ComparisonWindow(tk.Toplevel):
                 return float('nan')
         low, high = value('low'), value('high')
         bounds = [value(k) for k in ('alow', 'ahigh', 'rlow', 'rhigh')]
-        self.region_metrics = comparison_region_metrics(self.result, (low,high), bounds[:2], bounds[2:])
+        self.region_metrics, self.region_results = self.session.statistics((low,high), bounds[:2], bounds[2:])
         lines = []
         for label, m in self.region_metrics.items():
             if 'error' in m:
@@ -210,25 +220,27 @@ class ComparisonWindow(tk.Toplevel):
             self.metrics = overall
             self.plot.vars['x_min'].set(str(low)); self.plot.vars['x_max'].set(str(high)); self.plot.refresh()
         try:
-            self.ratios = integral_ratios(self.result, bounds[:2], bounds[2:])
+            self.integral_result, self.ratios = self.session.integrals(bounds[:2], bounds[2:])
             self.integral_text.set('\n'.join(f"{row['name']}:    I({bounds[0]:g}–{bounds[1]:g}) = {number(row['aliphatic']['area'])}    I({bounds[2]:g}–{bounds[3]:g}) = {number(row['aromatic']['area'])}    {tr('Ratio')} = {number(row['ratio'])}" for row in self.ratios))
         except (ValueError, TypeError) as exc:
             self.integral_text.set(str(exc))
 
     def metric_details(self):
         if any('error' not in values for values in self.region_metrics.values()):
-            AuditWindow(self, "R² / r² calculation details", regional_metrics_audit(self.result, self.region_metrics), self.result)
+            AuditWindow(self, "R² / r² calculation details", regional_metrics_audit(self.result, self.region_metrics, self.region_results),
+                        self.result, regional_preprocessing_audit(self.region_results))
         else:
             messagebox.showinfo(tr("Calculation details"), tr("Calculate valid results first."), parent=self)
 
     def integral_details(self):
         if self.ratios is not None:
-            AuditWindow(self, "Integral calculation details", integrals_audit(self.result, self.ratios), self.result)
+            AuditWindow(self, "Integral calculation details", integrals_audit(self.integral_result, self.ratios), self.integral_result)
         else:
             messagebox.showinfo(tr("Calculation details"), tr("Calculate valid results first."), parent=self)
 
     def reprocess(self):
         def done(result):
+            self.session.reset(result)
             self.result = result
             self.fields['low'].set(f"{result.x[0]:.10g}"); self.fields['high'].set(f"{result.x[-1]:.10g}")
             self._process_status(); self.calculate()

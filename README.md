@@ -3,9 +3,11 @@
 LabPlotter is a Windows and browser-based scientific workbench for FTIR, NanoDrop UV–Vis, Bruker solid-state NMR, ZetaSizer DLS/zeta-potential exports, and TEM TIFF particle-size screening.
 
 - Origin-style scientific plots with editable axes, fonts, legends, annotations, and exact width:height export ratios (including square and reset)
+- Click-to-edit desktop legends with corner resizing/reflow and a visibility toggle in every plot toolbar
 - Shared default colors: black, dark red, navy, gray, green, purple, and ochre, using the specified RGB values
 - Multiple-file overlays and instrument-specific processing
-- TopSpin four-column ASCII ssNMR import, named/reorderable local library, auditable preprocessing, paired overlays, direct R²/Pearson r² for three configurable regions, aliphatic/aromatic integral ratios, and one-click region views using the current bounds
+- TopSpin four-column ASCII ssNMR import, named/reorderable local library, auditable preprocessing, paired overlays, direct R²/Pearson r² for three configurable regions, aliphatic/aromatic integral ratios, and region buttons that rerun preprocessing with region-specific normalization (including editable Custom bounds)
+- Lab DLS raw Radius/Meas CSVs, two plots with a left-hand particle list, separate persistent library, draggable mean-radius annotations, representative/all-measurement views, live measurement hide/exclude controls and collapsible size/%PD tables
 - Four-panel ZetaSizer dashboard with a separate local particle library, automatic OCR summaries, and editable batch labels
 - Batch-aware TEM TIFF analysis with scale calibration, blank/duplicate rejection, reviewable particle overlays, size distributions, and CSV export
 - English/Korean interface
@@ -13,7 +15,7 @@ LabPlotter is a Windows and browser-based scientific workbench for FTIR, NanoDro
 - Desktop measurement data remains on the local computer
 - Session-oriented Streamlit web interface using the same scientific core
 
-The current development release is **0.8.5**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
+The current development release is **0.9.1**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
 
 ## Run from source
 

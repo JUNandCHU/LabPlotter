@@ -283,12 +283,21 @@ def comparison_region_metrics(result: ComparisonResult, comparison, aliphatic=(0
     return output
 
 
-def regional_metrics_audit(result: ComparisonResult, regions: dict) -> str:
-    sections = ["All regions use the same processed spectra. No region-specific renormalization.\n"
+def regional_metrics_audit(result: ComparisonResult, regions: dict, region_results: dict | None = None) -> str:
+    policy = ("Aliphatic and aromatic statistics use independent preprocessing from the original spectra over each requested region. "
+              "Comparison range uses the currently displayed processing result.\n" if region_results is not None else
+              "All regions use the same processed spectra. No region-specific renormalization.\n")
+    sections = [policy +
                 "Pearson r = sum((A-mean_A)*(B-mean_B)) / sqrt(SST_A*SS_B); r² = r*r.\n"]
     for name, values in regions.items():
-        sections.append(name + "\n" + (json.dumps(values, indent=2) if "error" in values else metrics_audit(result, values)))
+        source = (region_results or {}).get(name, result)
+        sections.append(name + "\n" + (json.dumps(values, indent=2) if "error" in values else
+                        json.dumps({"preprocessing": source.log}, indent=2, default=str) + "\n" + metrics_audit(source, values)))
     return "\n\n".join(sections)
+
+
+def regional_preprocessing_audit(region_results: dict) -> str:
+    return "\n\n".join(label + "\n" + preprocessing_audit(result) for label, result in region_results.items())
 
 
 def integral_ratios(result: ComparisonResult, aliphatic=(0.0, 50.0), aromatic=(90.0, 160.0)) -> list[dict]:

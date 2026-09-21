@@ -128,6 +128,8 @@ from labplotter.nmr_labels import KO as NMR_KO
 KO.update(NMR_KO)
 from labplotter.plot_labels import KO as PLOT_KO
 KO.update(PLOT_KO)
+from labplotter.lab_dls_labels import KO as LAB_DLS_KO
+KO.update(LAB_DLS_KO)
 
 def t(text: str) -> str:
     return KO.get(text, text) if st.session_state.get("language", "English") == "한국어" else text
@@ -250,10 +252,10 @@ def _plot_options(prefix: str, defaults: dict[str, Any]) -> PlotOptions:
         dark = third[3].checkbox(t("Dark background"), False, key=f"{prefix}-dark")
         st.caption(t("Axis limits (leave blank for automatic)"))
         limits = st.columns(4)
-        x_min = _float_or_none(limits[0].text_input(t("X minimum"), "", key=f"{prefix}-xmin"))
-        x_max = _float_or_none(limits[1].text_input(t("X maximum"), "", key=f"{prefix}-xmax"))
-        y_min = _float_or_none(limits[2].text_input(t("Y minimum"), "", key=f"{prefix}-ymin"))
-        y_max = _float_or_none(limits[3].text_input(t("Y maximum"), "", key=f"{prefix}-ymax"))
+        x_min = _float_or_none(limits[0].text_input(t("X minimum"), str(defaults.get("x_min", "")), key=f"{prefix}-xmin"))
+        x_max = _float_or_none(limits[1].text_input(t("X maximum"), str(defaults.get("x_max", "")), key=f"{prefix}-xmax"))
+        y_min = _float_or_none(limits[2].text_input(t("Y minimum"), str(defaults.get("y_min", "")), key=f"{prefix}-ymin"))
+        y_max = _float_or_none(limits[3].text_input(t("Y maximum"), str(defaults.get("y_max", "")), key=f"{prefix}-ymax"))
         st.caption(t("Tick spacing (0 = automatic)"))
         ticks = st.columns(2)
         x_tick = ticks[0].number_input(t("X spacing"), min_value=0.0, value=0.0, key=f"{prefix}-xtick") or None
@@ -338,6 +340,11 @@ def nanodrop_page() -> None:
 def nmr_page() -> None:
     from web.nmr_page import render_nmr_page
     render_nmr_page(t, _show_figure, _ratio_controls)
+
+
+def lab_dls_page() -> None:
+    from web.lab_dls_page import render_lab_dls_page
+    render_lab_dls_page(t, _show_figure, _plot_options)
 
 
 def zeta_page() -> None:
@@ -499,8 +506,8 @@ def main() -> None:
         st.info(t("Uploaded files are processed only for this browser session. Download your results before closing the page."))
         st.warning(t("Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only."))
         st.markdown(f"**{t('Contact and feedback')}**  \n{t('Jun Min Moon · moonkeving@gmail.com')}")
-    tabs = st.tabs(["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "TEM", t("Custom format")])
-    pages = (ftir_page, nanodrop_page, nmr_page, zeta_page, tem_page, custom_page)
+    tabs = st.tabs(["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "Lab DLS", "TEM", t("Custom format")])
+    pages = (ftir_page, nanodrop_page, nmr_page, zeta_page, lab_dls_page, tem_page, custom_page)
     for tab, page in zip(tabs, pages):
         with tab:
             page()

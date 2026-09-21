@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.1 — 2026-09-21
+
+- Moved the Lab DLS data list to the left and added per-measurement Hide/Exclude checkboxes. Exclusion immediately recomputes included counts, arithmetic averages, representative distributions and overlays without changing raw data. Saved libraries retain both flags and read older entries.
+- Added quick mean-label/mean-line toggles, label-position reset buttons and a selected-particle average-distribution mode below the graphs.
+- Collapsed overlay results into one average row per particle, with +/− expansion for measurements and excluded-row indicators. Kept font-metric row heights and scrollbars.
+- Added a Legend visibility control to every desktop plot toolbar. Click a legend to unlock editing, drag inside to move or corners to resize/reflow, then click outside or Esc to finish. Saved/copied images omit editing handles and retain layout.
+- Updated the web companion with the left data list, measurement controls, quick annotations, average mode and collapsed overlay details.
+
+## 0.9.0 — 2026-09-20
+
+- Added an independent Lab DLS tab for sparse Radius/Meas CSV distributions, with filename-based particle names, a right-side data list and two left-side plots. Kept the existing ZetaSizer workflow.
+- Applied the supplied PDF defaults: radius 0.01–1,000,000 nm on a log axis, intensity 0–20%, raw connected measurement points. Added full-height Y fitting for taller peaks.
+- Added an independent persistent Lab DLS library with save, rename, load, delete and reorder, plus explicit overlay registration/removal, equal-weight log-grid representative curves and an all-measurements switch.
+- Added configurable mean-radius lines and mean R labels, draggable desktop label positions, and export of the exact visible graph. Overlay annotations start disabled; shared color/ratio controls remain available.
+- Added below-graph per-measurement and arithmetic-average radius, diameter and distribution %PD results, CSV exports and calculation explanations distinguishing distribution moments from cumulants Z-average/PDI.
+- Added font-aware row heights/scrollbars to all Lab DLS lists and a web companion with portable session libraries and numeric annotation positioning.
+
+## 0.8.6 — 2026-09-19
+
+- Changed Aliphatic/Aromatic shortcuts to rerun preprocessing from preserved raw spectra, using the selected ppm range for alignment, grid, smoothing and normalization. Added an editable Custom region shortcut, defaulting to 0–200 ppm.
+- Displayed the applied processing range and synchronized preprocessing settings on desktop and web. Repeated switches never process an already normalized or smoothed view.
+- Regional R²/r² now use each region's own processing result. Preserved a shared preprocessing basis for aliphatic/aromatic integral ratios so independent regional normalization cannot erase relative signal amounts. Audit views record the correct processing source for every calculation.
+
 ## 0.8.5 — 2026-09-19
 
 - Added Aliphatic region / Aromatic region buttons to desktop and web spectrum comparison. Each click uses the current region bounds and immediately updates the plot and overall comparison statistics without rerunning preprocessing.

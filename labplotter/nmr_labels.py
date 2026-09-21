@@ -1,5 +1,11 @@
 """Shared Korean labels for the desktop and web ssNMR workspace."""
 KO = {
+    'Custom region': 'Custom 구간',
+    'Custom min': 'Custom 최솟값',
+    'Custom max': 'Custom 최댓값',
+    'Reprocess region': '구간별 재전처리',
+    'Processing range': '전처리 범위',
+    'Region statistics use separate preprocessing. Integral ratios use one shared preprocessing result for both regions.': '구간별 통계는 각 구간에서 재전처리합니다. 적분비는 두 구간에 공통으로 적용한 전처리 결과를 사용합니다.',
     'View region': '표시 구간',
     'The selected region needs increasing numeric bounds and at least three common measured points.': '선택한 구간의 최솟값과 최댓값을 숫자로 입력하고, 최솟값을 더 작게 설정하세요. 두 스펙트럼의 공통 측정점이 최소 3개 필요합니다.',
     'Comparison range': '전체 비교 구간',

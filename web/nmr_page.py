@@ -5,7 +5,8 @@ import numpy as np
 import streamlit as st
 from labplotter.models import Spectrum
 from labplotter.nmr import (PHASE_NOTE, ComparisonSettings, default_settings, preprocess_pair,
-    comparison_metrics, comparison_region_metrics, integral_ratios, regional_metrics_audit, integrals_audit, preprocessing_audit, comparison_csv)
+    comparison_region_metrics, integral_ratios, regional_metrics_audit, regional_preprocessing_audit, integrals_audit, preprocessing_audit, comparison_csv)
+from labplotter.nmr_comparison import ComparisonSession
 from labplotter.nmr_library import export_portable_library, import_portable_library
 from labplotter.plotting import PlotOptions
 from labplotter.web import parse_uploaded_payload, spectra_figure
@@ -58,41 +59,55 @@ def library_dialog(t):
 
 
 @st.dialog("Calculation audit", width="large", on_dismiss=_close_dialog)
-def audit_dialog(t, calculation, result):
+def audit_dialog(t, calculation, result, preprocessing=None):
     for title, content, filename in ((t('Calculation details'), calculation, 'ssNMR_calculation.txt'),
-                                      (t('Preprocessing audit'), preprocessing_audit(result), 'ssNMR_preprocessing.txt')):
+                                      (t('Preprocessing audit'), preprocessing if preprocessing is not None else preprocessing_audit(result), 'ssNMR_preprocessing.txt')):
         with st.expander(title, expanded=filename=='ssNMR_calculation.txt'):
             st.download_button(t('Save complete audit…'), content, filename, 'text/plain', key=filename)
             st.text_area(title, content, height=400, disabled=True, key='audit-'+filename)
 
 
+def _store_comparison(session):
+    st.session_state['_nmr_comparison'] = session
+    st.session_state['_nmr_result'] = session.result
+    st.session_state['_nmr_result_serial'] = st.session_state.get('_nmr_result_serial', 0) + 1
+
+
 @st.dialog("Spectrum comparison / preprocessing", width="large", on_dismiss=_close_dialog)
-def preprocessing_dialog(t):
-    spectra = st.session_state['_nmr_spectra']
-    ids = [s.uid for s in spectra]
-    fmt = lambda u: next(s.name for s in spectra if s.uid==u)
-    cols=st.columns(2)
-    a_id=cols[0].selectbox(t('Reference A'), ids, format_func=fmt, key='nmr-A')
-    b_id=cols[1].selectbox(t('Spectrum B'), ids, index=1, format_func=fmt, key='nmr-B')
-    if a_id==b_id:
-        st.error(t('Choose two different spectra.')); return
-    a=next(s for s in spectra if s.uid==a_id); b=next(s for s in spectra if s.uid==b_id)
-    defaults=default_settings(a,b)
-    key=a_id+b_id
+def preprocessing_dialog(t, edit_current=False):
+    session = st.session_state.get('_nmr_comparison') if edit_current else None
+    if session is not None:
+        a, b = session.a_raw, session.b_raw
+        defaults = session.result.settings
+        st.caption(f"A: {a.name} | B: {b.name}")
+        key = 'current-' + str(st.session_state['_nmr_result_serial'])
+    else:
+        spectra = st.session_state['_nmr_spectra']
+        ids = [s.uid for s in spectra]
+        fmt = lambda u: next(s.name for s in spectra if s.uid==u)
+        cols=st.columns(2)
+        a_id=cols[0].selectbox(t('Reference A'), ids, format_func=fmt, key='nmr-A')
+        b_id=cols[1].selectbox(t('Spectrum B'), ids, index=1, format_func=fmt, key='nmr-B')
+        if a_id==b_id:
+            st.error(t('Choose two different spectra.')); return
+        a=next(s for s in spectra if s.uid==a_id); b=next(s for s in spectra if s.uid==b_id)
+        defaults=default_settings(a,b)
+        key=a_id+b_id
     with st.form('nmr-preprocess-'+key):
         cols=st.columns(3)
         low=cols[0].number_input(t('Common ppm minimum'), value=defaults.ppm_min, format='%.6f', key='nmr-min-'+key)
         high=cols[1].number_input(t('Common ppm maximum'), value=defaults.ppm_max, format='%.6f', key='nmr-max-'+key)
         step=cols[2].number_input(t('Grid step (ppm)'), min_value=0.000001, value=defaults.grid_step, format='%.6f', key='nmr-step-'+key)
         cols=st.columns(2)
-        baseline=cols[0].checkbox(t('Automatic linear edge baseline'), True)
-        edge=cols[1].number_input(t('Baseline edge fraction'), 0.001,0.25,0.03,0.01,format='%.3f')
-        align=cols[0].checkbox(t('Automatic bounded chemical-shift alignment'),True)
-        max_shift=cols[1].number_input(t('Maximum B shift (ppm)'), 0.0,100.0,2.0,0.1)
-        amin=cols[0].text_input(t('Alignment minimum (blank = full)'), '')
-        amax=cols[1].text_input(t('Alignment maximum (blank = full)'), '')
-        fwhm=cols[0].number_input(t('Shared Gaussian FWHM (ppm)'),0.0,100.0,0.3,0.1)
-        norm=cols[1].selectbox(t('Normalization'), ['Maximum absolute intensity','Total absolute area','None'],format_func=t)
+        baseline=cols[0].checkbox(t('Automatic linear edge baseline'), defaults.baseline, key='nmr-baseline-'+key)
+        edge=cols[1].number_input(t('Baseline edge fraction'), 0.001,0.25,defaults.edge_fraction,0.01,format='%.3f',key='nmr-edge-'+key)
+        align=cols[0].checkbox(t('Automatic bounded chemical-shift alignment'),defaults.align,key='nmr-align-'+key)
+        max_shift=cols[1].number_input(t('Maximum B shift (ppm)'), 0.0,100.0,defaults.max_shift_ppm,0.1,key='nmr-shift-'+key)
+        amin=cols[0].text_input(t('Alignment minimum (blank = full)'), '' if defaults.alignment_min is None else str(defaults.alignment_min),key='nmr-amin-'+key)
+        amax=cols[1].text_input(t('Alignment maximum (blank = full)'), '' if defaults.alignment_max is None else str(defaults.alignment_max),key='nmr-amax-'+key)
+        fwhm=cols[0].number_input(t('Shared Gaussian FWHM (ppm)'),0.0,100.0,defaults.gaussian_fwhm_ppm,0.1,key='nmr-fwhm-'+key)
+        normalizations=['Maximum absolute intensity','Total absolute area','None']
+        norm=cols[1].selectbox(t('Normalization'),normalizations,index=normalizations.index(defaults.normalization),format_func=t,key='nmr-norm-'+key)
         st.info(t(PHASE_NOTE))
         st.caption(t('The union range is used by default. Missing coverage stays blank; calculations use measured overlap. Gaussian smoothing uses the same ppm width for both spectra. Normalization uses the full common measured range.'))
         submit=st.form_submit_button(t('Process and compare'))
@@ -101,8 +116,12 @@ def preprocessing_dialog(t):
             settings=ComparisonSettings(low,high,step,baseline,edge,align,max_shift,
                         float(amin) if amin.strip() else None,float(amax) if amax.strip() else None,fwhm,norm)
             with st.spinner(t('Processing…')):
-                st.session_state['_nmr_result']=preprocess_pair(a,b,settings)
-            st.session_state['_nmr_result_serial']=st.session_state.get('_nmr_result_serial',0)+1
+                result=preprocess_pair(a,b,settings)
+            if session is None:
+                session=ComparisonSession(a,b,result)
+            else:
+                session.reset(result)
+            _store_comparison(session)
             _close_dialog()
             st.rerun()
         except (ValueError,TypeError) as exc:
@@ -113,29 +132,37 @@ def comparison_panel(t, show_figure, ratio_controls=None):
     r=st.session_state.get('_nmr_result')
     if r is None:
         return
+    session=st.session_state.get('_nmr_comparison')
     key=str(st.session_state.get('_nmr_result_serial',0))
     st.subheader(t('Spectrum comparison'))
-    st.caption(f"A ({t('reference')}): {r.names[0]} | B: {r.names[1]} | {t('Applied B shift')}: {r.log['alignment']['B_shift_added_ppm']:+.6g} ppm | {t('Grid')}: {len(r.x):,} | Gaussian FWHM: {r.settings.gaussian_fwhm_ppm:g} ppm")
+    st.caption(f"A ({t('reference')}): {r.names[0]} | B: {r.names[1]} | {t('Processing range')}: {r.settings.ppm_min:g}–{r.settings.ppm_max:g} ppm | {t('Normalization')}: {t(r.settings.normalization)} | {t('Applied B shift')}: {r.log['alignment']['B_shift_added_ppm']:+.6g} ppm | {t('Grid')}: {len(r.x):,} | Gaussian FWHM: {r.settings.gaussian_fwhm_ppm:g} ppm")
     if r.log['alignment'].get('at_limit'):
         st.warning(t('Alignment reached the shift limit; inspect the overlay.'))
+    if st.button(t('Preprocessing settings…'), key='nmr-edit-preprocessing', disabled=session is None):
+        st.session_state['_nmr_dialog'] = 'reprocess'
     def show_region(low_key, high_key, defaults):
         low = st.session_state.get(low_key, defaults[0])
         high = st.session_state.get(high_key, defaults[1])
         try:
-            comparison_metrics(r, low, high)
-        except (ValueError, TypeError):
-            st.session_state['_nmr_region_error'] = True
+            session.select_region(low, high)
+        except (ValueError, TypeError) as exc:
+            st.session_state['_nmr_region_error'] = str(exc)
             return
         st.session_state.pop('_nmr_region_error', None)
-        st.session_state['nmr-compare-low-'+key] = low
-        st.session_state['nmr-compare-high-'+key] = high
-    cols=st.columns(2)
-    cols[0].button(t('Aliphatic region'), key='nmr-view-aliphatic', on_click=show_region,
+        _store_comparison(session)
+    cols=st.columns(3)
+    cols[0].button(t('Aliphatic region'), key='nmr-view-aliphatic', on_click=show_region, disabled=session is None,
                    args=('nmr-int-a-low', 'nmr-int-a-high', (0.0, 50.0)))
-    cols[1].button(t('Aromatic region'), key='nmr-view-aromatic', on_click=show_region,
+    cols[1].button(t('Aromatic region'), key='nmr-view-aromatic', on_click=show_region, disabled=session is None,
                    args=('nmr-int-r-low', 'nmr-int-r-high', (90.0, 160.0)))
-    if st.session_state.pop('_nmr_region_error', False):
-        st.error(t('The selected region needs increasing numeric bounds and at least three common measured points.'))
+    cols[2].button(t('Custom region'), key='nmr-view-custom', on_click=show_region, disabled=session is None,
+                   args=('nmr-custom-low', 'nmr-custom-high', (0.0, 200.0)))
+    error=st.session_state.pop('_nmr_region_error', None)
+    if error:
+        st.error(error)
+    cols=st.columns(2)
+    cols[0].number_input(t('Custom min')+' (ppm)',value=0.0,key='nmr-custom-low')
+    cols[1].number_input(t('Custom max')+' (ppm)',value=200.0,key='nmr-custom-high')
     st.session_state.setdefault('nmr-compare-low-'+key, float(r.x[0]))
     st.session_state.setdefault('nmr-compare-high-'+key, float(r.x[-1]))
     cols=st.columns(2)
@@ -156,7 +183,12 @@ def comparison_panel(t, show_figure, ratio_controls=None):
     ahigh=cols[1].number_input(t('Aliphatic max'),value=50.0,key='nmr-int-a-high')
     rlow=cols[2].number_input(t('Aromatic min'),value=90.0,key='nmr-int-r-low')
     rhigh=cols[3].number_input(t('Aromatic max'),value=160.0,key='nmr-int-r-high')
-    regions=comparison_region_metrics(r,(low,high),(alow,ahigh),(rlow,rhigh))
+    if session is not None:
+        regions, region_results=session.statistics((low,high),(alow,ahigh),(rlow,rhigh))
+        st.caption(t('Region statistics use separate preprocessing. Integral ratios use one shared preprocessing result for both regions.'))
+    else:
+        regions=comparison_region_metrics(r,(low,high),(alow,ahigh),(rlow,rhigh))
+        region_results=None
     st.session_state['_nmr_region_metrics'] = regions
     for label,m in regions.items():
         st.markdown('**'+t(label)+'**')
@@ -168,13 +200,18 @@ def comparison_panel(t, show_figure, ratio_controls=None):
             col.metric(name,value)
         st.caption(f"{t('Used ppm')}: {m['used_range_ppm'][0]:.7g} … {m['used_range_ppm'][1]:.7g}")
     if st.button(t('R² / r² calculation details…'), key='nmr-metric-audit'):
-        st.session_state['_nmr_audit_text'] = regional_metrics_audit(r,regions)
+        st.session_state['_nmr_audit_text'] = regional_metrics_audit(r,regions,region_results)
+        st.session_state['_nmr_audit_result'] = r
+        st.session_state['_nmr_audit_preprocessing'] = regional_preprocessing_audit(region_results) if region_results is not None else None
         st.session_state['_nmr_dialog'] = 'audit'
     try:
-        ratios=integral_ratios(r,(alow,ahigh),(rlow,rhigh))
+        integral_result, ratios=session.integrals((alow,ahigh),(rlow,rhigh)) if session is not None else (r,integral_ratios(r,(alow,ahigh),(rlow,rhigh)))
+        st.session_state['_nmr_integral_ratios'] = ratios
         st.dataframe([{'Spectrum':v['name'],f'I({alow:g}–{ahigh:g} ppm)':v['aliphatic']['area'],f'I({rlow:g}–{rhigh:g} ppm)':v['aromatic']['area'], 'Aliphatic / aromatic':v['ratio']} for v in ratios],hide_index=True)
         if st.button(t('Integral calculation details…'),key='nmr-integral-audit'):
-            st.session_state['_nmr_audit_text'] = integrals_audit(r,ratios)
+            st.session_state['_nmr_audit_text'] = integrals_audit(integral_result,ratios)
+            st.session_state['_nmr_audit_result'] = integral_result
+            st.session_state['_nmr_audit_preprocessing'] = None
             st.session_state['_nmr_dialog'] = 'audit'
     except ValueError as exc:
         st.error(str(exc))
@@ -230,5 +267,7 @@ def render_nmr_page(t, show_figure, ratio_controls=None):
         library_dialog(t)
     elif modal == 'preprocess' and len(spectra) >= 2:
         preprocessing_dialog(t)
+    elif modal == 'reprocess' and st.session_state.get('_nmr_comparison') is not None:
+        preprocessing_dialog(t, edit_current=True)
     elif modal == 'audit' and st.session_state.get('_nmr_result') is not None:
-        audit_dialog(t, st.session_state['_nmr_audit_text'], st.session_state['_nmr_result'])
+        audit_dialog(t, st.session_state['_nmr_audit_text'], st.session_state.get('_nmr_audit_result',st.session_state['_nmr_result']), st.session_state.get('_nmr_audit_preprocessing'))

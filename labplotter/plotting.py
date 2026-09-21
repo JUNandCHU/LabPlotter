@@ -199,6 +199,8 @@ def apply_origin_style(figure: Figure, axis, options: PlotOptions) -> None:
 
 
 def figure_export_bbox(figure: Figure):
+    if getattr(figure, "_labplotter_export_current_view", False):
+        return None
     # Tight cropping would silently change a requested square/rectangular ratio.
     if getattr(figure, "_labplotter_ratio", None) is not None:
         return Bbox.from_bounds(0, 0, *figure.get_size_inches())
@@ -210,7 +212,7 @@ def save_plot_figure(figure: Figure, destination, **kwargs) -> None:
     positions = [(axis, axis.get_position().frozen(), axis.get_in_layout()) for axis in figure.axes]
     try:
         ratio = getattr(figure, "_labplotter_ratio", None)
-        if ratio is not None:
+        if ratio is not None and not getattr(figure, "_labplotter_export_current_view", False):
             figure.set_size_inches(*figure_size_for_ratio(size, ratio), forward=False)
             if figure.get_layout_engine() is None:
                 figure.tight_layout()
