@@ -110,6 +110,34 @@ class LabDLSDesktopTests(unittest.TestCase):
         finally:font.configure(size=previous)
         self.assertFalse(self.errors)
 
+    def test_common_colors_follow_mean_annotations_and_survive_measurement_modes(self):
+        tab=self.tab; pane=tab.plot
+        particle=tab.displayed('selected')[0]
+        pane.open_settings();self.settle()
+        editor=pane.settings_window.curve_editor
+        key=tab.curves('selected')[0][0][0]
+        before=[row.copy() for row in tab.results['selected'].rows]
+        editor.variables[key].set('#1287AB');self.settle()
+        self.assertEqual(pane.axis.lines[0].get_color(),'#1287AB')
+        self.assertEqual(pane.axis.lines[1].get_color(),'#1287AB')
+        self.assertEqual(pane.axis.texts[0].get_color(),'#1287AB')
+        self.assertEqual(tab.settings.get('lab_dls_colors_selected')[key],'#1287AB')
+        tab.set_measurement_state(particle.uid,0,'hidden',True);self.settle()
+        self.assertNotIn(key,editor.variables)
+        tab.set_measurement_state(particle.uid,0,'hidden',False);self.settle()
+        self.assertEqual(pane.axis.lines[0].get_color(),'#1287AB')
+        tab.quick_controls['selected']['average'].invoke();self.settle()
+        mean_key=particle.uid+':mean'
+        self.assertEqual(list(editor.variables),[mean_key])
+        editor.variables[mean_key].set('#A012AB');self.settle()
+        self.assertEqual(pane.axis.lines[0].get_color(),'#A012AB')
+        tab.quick_controls['selected']['average'].invoke();self.settle()
+        self.assertEqual(pane.axis.lines[0].get_color(),'#1287AB')
+        self.assertEqual(tab.results['selected'].rows,before)
+        pane.settings_window.restore_defaults();self.settle()
+        self.assertFalse(tab.extensions['selected'].colors)
+        self.assertFalse(self.errors)
+
     def test_measurement_checkboxes_live_averages_quick_controls_and_collapsed_overlay(self):
         tab=self.tab;p=self.b
         self.assertLess(tab.controls.winfo_rootx(),tab.plot.winfo_rootx())

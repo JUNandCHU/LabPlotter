@@ -13,7 +13,7 @@ def main() -> None:
     if app.exception:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     titles = [item.value for item in app.title]
-    if titles != ["LabPlotter Web 0.9.1"]:
+    if titles != ["LabPlotter Web 0.9.2"]:
         raise RuntimeError(f"Unexpected title: {titles}")
     labels = [item.label for item in app.tabs]
     expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "Lab DLS", "TEM", "Custom format"]
@@ -37,6 +37,9 @@ def main() -> None:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     if len(app.metric) != 12 or app.session_state["_nmr_result"].names != ("A", "B"):
         raise RuntimeError("ssNMR comparison controls did not produce metrics")
+    uid = app.session_state['_nmr_comparison'].a_raw.uid
+    color_key = 'nmr-comparison-color-' + uid
+    app.color_picker(key=color_key).set_value('#1287AB').run()
     before = app.session_state['_nmr_region_metrics']['Aliphatic region']['n']
     app.number_input(key='nmr-int-a-high').set_value(30.0).run()
     regional = app.session_state['_nmr_region_metrics']['Aliphatic region']
@@ -65,6 +68,11 @@ def main() -> None:
     app.button(key='nmr-comparison-ratio-reset').click().run()
     if app.session_state['nmr-comparison-fixed-ratio']:
         raise RuntimeError('Graph ratio reset failed')
+    if app.color_picker(key=color_key).value.upper() != '#1287AB':
+        raise RuntimeError('Comparison colors did not survive region reprocessing')
+    app.button(key='nmr-comparison-reset-colors').click().run()
+    if app.color_picker(key=color_key).value.upper() != '#000000':
+        raise RuntimeError('Comparison color reset failed')
     app.button(key="nmr-metric-audit").click().run()
     if app.exception or not any("SSE" in item.value and "Aliphatic region" in item.value and "Aromatic region" in item.value for item in app.text_area):
         raise RuntimeError("ssNMR calculation audit did not open")
@@ -88,7 +96,13 @@ def main() -> None:
     dls.run()
     if dls.exception or dls.session_state['lab-dls-overlay-plot-curve-count']!=0:
         raise RuntimeError('Lab DLS startup/explicit registration failed')
+    selected_color = 'lab-dls-selected-plot-color-' + particles[0].uid + ':Meas 1'
+    dls.color_picker(key=selected_color).set_value('#ABCDEF').run()
     dls.button(key='lab-dls-register').click().run()
+    dls.selectbox(key='lab-dls-selected').set_value(particles[1].uid).run()
+    dls.selectbox(key='lab-dls-selected').set_value(particles[0].uid).run()
+    if dls.color_picker(key=selected_color).value.upper() != '#ABCDEF':
+        raise RuntimeError('Lab DLS lost colors when another particle was selected')
     dls.selectbox(key='lab-dls-selected').set_value(particles[1].uid).run()
     dls.button(key='lab-dls-register').click().run()
     if dls.exception or dls.session_state['lab-dls-overlay-plot-curve-count']!=2:

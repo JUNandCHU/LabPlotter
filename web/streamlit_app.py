@@ -202,14 +202,8 @@ def _spectrum_selector(spectra: list[Spectrum], prefix: str) -> list[Spectrum]:
 
 
 def _series_colors(items: list[tuple[str, str]], prefix: str) -> dict[str, str]:
-    defaults = SERIES_PALETTE
-    result: dict[str, str] = {}
-    with st.expander(t("Series colors"), expanded=False):
-        columns = st.columns(2)
-        for index, (uid, label) in enumerate(items):
-            with columns[index % 2]:
-                result[uid] = st.color_picker(label, defaults[index % len(defaults)], key=f"{prefix}-color-{uid}")
-    return result
+    from color_controls import series_colors
+    return series_colors(t, items, prefix)
 
 
 def _ratio_controls(prefix: str):
@@ -357,11 +351,21 @@ def zeta_page() -> None:
         return
     all_particles = sorted({item.particle_name for item in measurements}, key=str.casefold)
     particles = st.multiselect(t("Particles"), all_particles, default=all_particles, key="zeta-particles")
-    colors = _series_colors([(name, name) for name in particles], "zeta")
     controls = st.columns(3)
     show_replicates = controls[0].checkbox(t("Show replicates"), True, key="zeta-reps")
     show_mean = controls[1].checkbox(t("Show mean curve"), True, key="zeta-mean")
     mark_maximum = controls[2].checkbox(t("Mark distribution maximum"), len(particles) == 1, key="zeta-max")
+    from color_controls import series_colors
+    from labplotter.web import zetasizer_replicate_key
+    color_items = [(name, name) for name in particles]
+    defaults = {name: SERIES_PALETTE[i % len(SERIES_PALETTE)] for i, name in enumerate(particles)}
+    if show_replicates or not show_mean:
+        for record in measurements:
+            if record.particle_name in particles:
+                key = zetasizer_replicate_key(record)
+                color_items.append((key, f"{record.kind} / {record.particle_name} / rep {record.replicate}"))
+                defaults[key] = defaults[record.particle_name]
+    colors = series_colors(t, list(dict(color_items).items()), "zeta", defaults)
     left, right = st.columns(2)
     with left:
         st.subheader(t("DLS distributions"))
@@ -454,7 +458,8 @@ def tem_page() -> None:
     st.dataframe(summaries, width="stretch")
     st.subheader(t("Particle-size distributions"))
     options = _plot_options("tem-distribution", {"x_label": "Particle diameter", "x_unit": "nm", "y_label": "Density", "y_unit": ""})
-    _show_figure(tem_distribution_figure(analyses, options), "TEM_distribution")
+    colors = _series_colors([(name, name) for name in sorted(grouped)], "tem-distribution")
+    _show_figure(tem_distribution_figure(analyses, options, colors=colors), "TEM_distribution")
     st.download_button(t("Download particle CSV"), _tem_csv(analyses), "LabPlotter_TEM_particles.csv", "text/csv")
 
 
