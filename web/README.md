@@ -46,6 +46,10 @@ metrics use the same `labplotter.nmr` functions as the desktop.
 
 The Aliphatic, Aromatic, and editable Custom (default 0–200 ppm) buttons reprocess the original spectra over the selected range. Regional statistics use regional normalization, while aliphatic/aromatic integral ratios keep a shared processing basis. The preprocessing dialog and audits show the actual applied ranges.
 
+## Curve colors in 0.9.2
+
+All graph tabs have a Curve colors expander with RGB/HEX pickers and Restore default curve colors. Selections remain tied to the dataset through reruns, hiding and ssNMR region processing. Lab DLS labels and mean lines follow their curve unless a separate annotation color is set. Preview and image downloads use the same colors.
+
 ## Lab DLS in 0.9.1
 
 The separate Lab DLS tab accepts sparse `Radius (nm), Meas 1, ...` CSVs. Default axes are 0.01–1,000,000 nm (log) and 0–20% intensity. Raw replicates retain their own coordinates; explicitly registered overlay particles use an equal-weight representative curve by default, with an all-measurements switch. Mean-radius annotations are on for the selected particle and off for the overlay. Their style and X/Y label positions are editable; drag-and-drop labels and Windows clipboard copy are available in the desktop edition. Preview/PNG/SVG share the same figure.

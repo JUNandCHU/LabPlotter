@@ -5,7 +5,7 @@ from dataclasses import asdict
 import math
 from pathlib import Path
 import tkinter as tk
-from tkinter import colorchooser, filedialog, font as tkfont, messagebox, simpledialog, ttk
+from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 
 from matplotlib.colors import is_color_like
 
@@ -165,7 +165,6 @@ class DLSSettings:
         self.vars = {k: (tk.BooleanVar(value=v) if isinstance(v, bool) else tk.StringVar(value=str(v)))
                      for k, v in asdict(self.style).items()}
         self.colors = owner.settings.get("lab_dls_colors_" + key, {})
-        self.color_vars = {}
 
     def build(self, parent):
         for text, key in (("Show mean-radius lines", "show_lines"), ("Show mean R labels", "show_labels"),
@@ -186,21 +185,8 @@ class DLSSettings:
         ttk.Button(parent, text=tr("Reset mean R label positions"), command=self.owner.drags[self.key].reset).pack(anchor="w", pady=5)
         ttk.Label(parent, text=tr("Drag mean R labels directly on the plot. Copy graph includes the visible labels."), wraplength=550).pack(anchor="w", pady=5)
         self.error = ttk.Label(parent, foreground="#A00000", wraplength=550); self.error.pack(anchor="w")
-        colors = ttk.LabelFrame(parent, text=tr("Series colors"), padding=8); colors.pack(fill="x", pady=6)
-        self.color_vars = {}
-        for row, (key, name, _, color, _) in enumerate(self.owner.curves(self.key)[0]):
-            self.color_vars[key] = var = tk.StringVar(value=self.colors.get(key, color))
-            ttk.Label(colors, text=name, wraplength=340).grid(row=row, column=0, sticky="w", padx=3, pady=3)
-            ttk.Entry(colors, textvariable=var, width=12).grid(row=row, column=1, padx=3)
-            ttk.Button(colors, text=tr("Choose…"), command=lambda v=var: self.choose_color(v, parent)).grid(row=row, column=2)
-
-    def choose_color(self, var, parent):
-        color = colorchooser.askcolor(color=var.get(), parent=parent.winfo_toplevel())[1]
-        if color:
-            var.set(color)
-
     def variables(self):
-        return [*self.vars.values(), *self.color_vars.values()]
+        return list(self.vars.values())
 
     def apply(self):
         values = {k: v.get() for k, v in self.vars.items()}
@@ -215,9 +201,6 @@ class DLSSettings:
                 raise ValueError()
             if values["color"] and not is_color_like(values["color"]):
                 raise ValueError()
-            colors = {key: var.get() for key, var in self.color_vars.items()}
-            if not all(is_color_like(color) for color in colors.values()):
-                raise ValueError()
         except (ValueError, TypeError):
             if hasattr(self, "error") and self.error.winfo_exists():
                 self.error.configure(text=tr("Enter valid colors, line width 0–20, font size 4–72, opacity 0–1 and decimals 0–8."))
@@ -225,7 +208,6 @@ class DLSSettings:
         if hasattr(self, "error") and self.error.winfo_exists():
             self.error.configure(text="")
         self.style = DLSStyle(**values)
-        self.colors.update(colors)
         self.owner.settings.set("lab_dls_style_" + self.key, values)
         self.owner.settings.set("lab_dls_colors_" + self.key, self.colors)
         self.pane.refresh()
@@ -234,9 +216,6 @@ class DLSSettings:
         for k, v in asdict(self.default).items():
             self.vars[k].set(v)
         self.colors.clear()
-        for key, _, _, color, _ in self.owner.curves(self.key)[0]:
-            if key in self.color_vars:
-                self.color_vars[key].set(color)
         self.apply()
         self.owner.drags[self.key].reset()
 
@@ -374,7 +353,8 @@ class LabDLSTab(ttk.Frame):
     def _draw(self, key, axis, options):
         curves, errors = self.curves(key)
         extension = self.extensions[key]
-        labels = draw_dls(axis, options, curves, extension.style, self.drags[key].positions, extension.colors)
+        labels = draw_dls(axis, options, curves, extension.style, self.drags[key].positions, extension.colors,
+                          lambda: self.settings.set("lab_dls_colors_" + key, extension.colors))
         self.drags[key].set_artists(labels)
         if not curves:
             text = "No visible measurements. Check Hide / Exclude." if self.displayed(key) else ("Register particles with the overlay button." if key=="overlay" else "Import a CSV and select a particle.")

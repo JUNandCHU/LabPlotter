@@ -168,6 +168,10 @@ def spectra_figure(
     return figure
 
 
+def zetasizer_replicate_key(record):
+    return f"{record.kind}:{record.particle_name}:rep:{record.replicate}"
+
+
 def zetasizer_curve_figure(
     measurements: Iterable[ZetaMeasurement],
     kind: str,
@@ -194,13 +198,15 @@ def zetasizer_curve_figure(
         color = (colors or {}).get(particle, palette[index])
         if show_replicates:
             for record in records:
-                axis.plot(record.x, record.y, color=color, alpha=0.25, linewidth=max(0.8, options.line_width * 0.65))
+                rep_color = (colors or {}).get(zetasizer_replicate_key(record), color)
+                axis.plot(record.x, record.y, color=rep_color, alpha=0.25, linewidth=max(0.8, options.line_width * 0.65))
         if show_mean:
             grid, mean, _ = mean_curve([(record.x, record.y) for record in records])
             axis.plot(grid, mean, color=color, linewidth=options.line_width, label=particle)
             peak_x, peak_y = float(grid[int(np.nanargmax(mean))]), float(np.nanmax(mean))
         else:
             record = records[0]
+            color = (colors or {}).get(zetasizer_replicate_key(record), color)
             axis.plot(record.x, record.y, color=color, linewidth=options.line_width, label=particle)
             peak = int(np.nanargmax(record.y))
             peak_x, peak_y = float(record.x[peak]), float(record.y[peak])
@@ -272,20 +278,23 @@ def tem_overlay_figure(payload: bytes, analysis: TEMImageAnalysis) -> Figure:
     return figure
 
 
-def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis], options: PlotOptions | None = None) -> Figure:
+def tem_distribution_figure(analyses: Iterable[TEMImageAnalysis], options: PlotOptions | None = None,
+                            colors: dict[str, str] | None = None) -> Figure:
     grouped: dict[str, list[float]] = {}
     for analysis in analyses:
         if analysis.included and analysis.status == "analyzed":
             grouped.setdefault(analysis.batch_name, []).extend(analysis.diameters_nm)
     figure = Figure(figsize=(8.5, 5.2), constrained_layout=True)
     axis = figure.add_subplot(111)
-    colors = _default_colors(len(grouped))
+    colors = colors or {}
+    defaults = _default_colors(len(grouped))
     for index, (batch, values) in enumerate(sorted(grouped.items())):
         data = np.asarray(values, dtype=float)
         if not data.size:
             continue
         bins = min(40, max(8, int(np.sqrt(data.size) * 2)))
-        axis.hist(data, bins=bins, density=True, histtype="step", linewidth=2.0, color=colors[index], label=f"{batch} (n={len(data)})")
+        axis.hist(data, bins=bins, density=True, histtype="step", linewidth=2.0,
+                  color=colors.get(batch, defaults[index]), label=f"{batch} (n={len(data)})")
     options = options or PlotOptions("Particle diameter", "nm", "Density", "", font_family="DejaVu Sans", reverse_x=False)
     apply_origin_style(figure, axis, options)
     _style_legend(axis, options)

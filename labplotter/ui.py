@@ -27,6 +27,7 @@ from PIL import Image, ImageTk
 from . import __version__
 from .clipboard import copy_png_to_clipboard
 from .config import SettingsStore
+from .curve_colors import begin_curve_colors, curve_color
 from .i18n import canonical, language, localize_widget_tree, manager as language_manager, set_language, tr, translate_value
 from .models import Spectrum
 from .nmr_ui import SSNMRTab
@@ -273,6 +274,8 @@ class PlotPane(ttk.Frame):
         self.toolbar = None
         self.settings_window = None
         self.settings_extension = None
+        self.curve_colors = {}
+        self._color_history = {}
         self.annotation_window = None
         self.annotations: list[AnnotationSpec] = []
         self.annotation_artists = []
@@ -430,10 +433,14 @@ class PlotPane(ttk.Frame):
         self.legend_editor.attach(None)
         self.axis.clear()
         self.axis.set_prop_cycle(color=SERIES_PALETTE)
+        begin_curve_colors(self.axis, self.curve_colors)
         self._legend_artist = None
         self.overlay_artists = []
         try:
             self.draw_callback(self.axis, self.options)
+            self._color_history.update(self.axis._labplotter_color_series)
+            if self.settings_window is not None and self.settings_window.winfo_exists():
+                self.settings_window.curve_editor.refresh()
             apply_origin_style(self.figure, self.axis, self.options)
             self._create_legend()
             self.figure.tight_layout()
@@ -442,6 +449,13 @@ class PlotPane(ttk.Frame):
             self.canvas.draw_idle()
         except Exception as exc:
             messagebox.showerror(tr("Plot error"), str(exc), parent=self)
+
+    def refresh_curve_colors(self):
+        # A color choice should not undo a toolbar zoom/pan.
+        xlim, ylim = self.axis.get_xlim(), self.axis.get_ylim()
+        self.refresh()
+        self.axis.set_xlim(xlim); self.axis.set_ylim(ylim)
+        self.canvas.draw_idle()
 
     def _create_legend(self):
         from .legend_editor import resize_legend
@@ -471,7 +485,7 @@ class PlotPane(ttk.Frame):
             handles, labels = list(handles[:maximum]), list(labels[:maximum])
             if hidden:
                 handles.append(Line2D([], [], color="none", linewidth=0))
-                labels.append(tr("+ {count} more · see Series colors", count=hidden))
+                labels.append(tr("+ {count} more · see Curve colors", count=hidden))
             kwargs = dict(
                 frameon=True,
                 framealpha=0.82,
@@ -524,6 +538,9 @@ class PlotPane(ttk.Frame):
         self.annotation_window = AnnotationWindow(self)
 
     def restore_defaults(self):
+        for entry in self._color_history.values():
+            entry.set(None)
+        self.curve_colors.clear()
         self.options = deepcopy(self.default_options)
         values = {
             "x_label": tr(self.options.x_label), "x_unit": self.options.x_unit,
@@ -822,10 +839,11 @@ class FTIRTab(ttk.Frame):
         return self._cache[key]
 
     def _draw(self, axis, options):
-        for spectrum in self.tree.visible():
+        for index, spectrum in enumerate(self.tree.visible()):
             y = self._processed(spectrum)
-            kwargs = {"color": spectrum.metadata["color"]} if spectrum.metadata.get("color") else {}
-            line, = axis.plot(spectrum.x, y, label=spectrum.name, linewidth=options.line_width, **kwargs)
+            color = curve_color(axis, spectrum.uid, spectrum.name, SERIES_PALETTE[index % len(SERIES_PALETTE)],
+                                spectrum.metadata, "color")
+            line, = axis.plot(spectrum.x, y, label=spectrum.name, linewidth=options.line_width, color=color)
             if self.peaks.get():
                 try:
                     fraction = float(self.prominence.get())
@@ -915,10 +933,10 @@ class NanoDropTab(ttk.Frame):
         self._refresh()
 
     def _draw(self, axis, options):
-        for spectrum in self.tree.visible():
+        for index, spectrum in enumerate(self.tree.visible()):
             kwargs = {"color": "#777777", "linestyle": "--"} if spectrum.metadata.get("blank") else {}
-            if spectrum.metadata.get("color"):
-                kwargs["color"] = spectrum.metadata["color"]
+            kwargs["color"] = curve_color(axis, spectrum.uid, spectrum.name,
+                kwargs.get("color", SERIES_PALETTE[index % len(SERIES_PALETTE)]), spectrum.metadata, "color")
             axis.plot(spectrum.x, spectrum.y, label=spectrum.name, linewidth=options.line_width, **kwargs)
         if not self.tree.visible():
             axis.text(0.5, 0.5, tr("Add a NanoDrop XML/XLSX export"), ha="center", va="center", transform=axis.transAxes)
@@ -1532,7 +1550,7 @@ class TEMTab(ttk.Frame):
             values = np.asarray(grouped[batch], dtype=float)
             if not values.size:
                 continue
-            color = SERIES_PALETTE[index % len(SERIES_PALETTE)]
+            color = curve_color(axis, batch, batch, SERIES_PALETTE[index % len(SERIES_PALETTE)])
             axis.hist(
                 values,
                 bins=bins,
@@ -1753,7 +1771,7 @@ class OCRReviewPane(ttk.Frame):
 class SeriesColorSettingsExtension:
     """Color controls shared by ZetaSizer distribution and batch plots."""
 
-    title = "Series colors"
+    title = "Particle color defaults"
 
     def __init__(self, owner, plot_key: str, item_kind: str):
         self.owner = owner
@@ -2421,9 +2439,11 @@ class ZetaTab(ttk.Frame):
             if mode in {"Mean + replicates", "Replicates only"}:
                 for item in items:
                     label = f"{name} {tr('rep {number}', number=item['replicate'])}"
-                    axis.plot(item["x"], item["y"], color=color, alpha=0.28 if mode == "Mean + replicates" else 0.75, linewidth=max(0.8, options.line_width * 0.65), label=label if mode == "Replicates only" else "_nolegend_")
+                    rep_color = curve_color(axis, f"replicate:{name}:{item['replicate']}", label, color)
+                    axis.plot(item["x"], item["y"], color=rep_color, alpha=0.28 if mode == "Mean + replicates" else 0.75, linewidth=max(0.8, options.line_width * 0.65), label=label if mode == "Replicates only" else "_nolegend_")
             x, mean, sd = mean_curve(curves)
             if mode != "Replicates only":
+                color = curve_color(axis, "mean:" + name, name, color)
                 axis.plot(x, mean, color=color, linewidth=options.line_width, label=name)
                 if mode == "Mean ± SD":
                     axis.fill_between(x, mean - sd, mean + sd, color=color, alpha=0.18, linewidth=0)
@@ -2455,7 +2475,8 @@ class ZetaTab(ttk.Frame):
         if values:
             x = np.arange(len(values))
             plot_key = f"{kind.casefold()}_bar"
-            colors = [self.series_color(plot_key, name, index) for index, name in enumerate(particles)]
+            colors = [curve_color(axis, name, name, self.series_color(plot_key, name, index))
+                      for index, name in enumerate(particles)]
             axis.bar(x, values, color=colors, edgecolor="black", linewidth=0.7,
                      yerr=errors if extension.error_bars.get() else None, capsize=4)
             axis.set_xticks(x, labels, rotation=30, ha="right")
@@ -2656,9 +2677,10 @@ class GenericTab(ttk.Frame):
             self.tree.add(loaded)
 
     def _draw(self, axis, options):
-        for spectrum in self.tree.visible():
-            kwargs = {"color": spectrum.metadata["color"]} if spectrum.metadata.get("color") else {}
-            axis.plot(spectrum.x, spectrum.y, linewidth=options.line_width, label=spectrum.name, **kwargs)
+        for index, spectrum in enumerate(self.tree.visible()):
+            color = curve_color(axis, spectrum.uid, spectrum.name, SERIES_PALETTE[index % len(SERIES_PALETTE)],
+                                spectrum.metadata, "color")
+            axis.plot(spectrum.x, spectrum.y, linewidth=options.line_width, label=spectrum.name, color=color)
         if not self.tree.visible():
             axis.text(0.5, 0.5, tr("Create or select a custom format, then import data"), ha="center", va="center", transform=axis.transAxes)
 

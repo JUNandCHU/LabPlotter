@@ -14,6 +14,7 @@ from .nmr import (PHASE_NOTE, ComparisonSettings, default_settings, parse_topspi
 from .nmr_comparison import ComparisonSession
 from .nmr_library import NMRLibrary
 from .plotting import PlotOptions, SERIES_PALETTE
+from .curve_colors import curve_color
 
 
 def number(value):
@@ -190,7 +191,9 @@ class ComparisonWindow(tk.Toplevel):
         self.plot.vars['y_unit'].set('a.u.' if r.settings.normalization == 'None' else 'normalized a.u.')
 
     def _draw(self, axis, options):
-        for name, values, color in zip(self.result.names, (self.result.a, self.result.b), SERIES_PALETTE[:2]):
+        for raw, name, values, default in zip((self.a_raw, self.b_raw), self.result.names,
+                                             (self.result.a, self.result.b), SERIES_PALETTE[:2]):
+            color = curve_color(axis, raw.uid, name, default)
             axis.plot(self.result.x, values, label=name, color=color, linewidth=options.line_width)
 
     def calculate(self):
@@ -413,7 +416,8 @@ class SSNMRTab(ttk.Frame):
         selected = self.selected()
         if selected:
             spectrum = selected[0]
-            axis.plot(spectrum.x, spectrum.y, label=spectrum.name, color=SERIES_PALETTE[0], linewidth=options.line_width)
+            color = curve_color(axis, spectrum.uid, spectrum.name, SERIES_PALETTE[0], spectrum.metadata, "color")
+            axis.plot(spectrum.x, spectrum.y, label=spectrum.name, color=color, linewidth=options.line_width)
         else:
             axis.text(0.5, 0.5, tr('Import TopSpin ASCII TXT data'), ha='center', transform=axis.transAxes)
 

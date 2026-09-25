@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2 — 2026-09-24
+
+- Added a shared Curve colors page to every desktop plot's settings, with native RGB selection, HEX/name input, live/manual apply, color swatches, per-curve/default restoration and font-sized scrollable rows.
+- Connected FTIR, NanoDrop, ssNMR raw/comparison, ZetaSizer means/replicates/bars, Lab DLS individual/average/overlay distributions, TEM histograms and custom-format plots. Keep overrides attached to data identity through hide/show, rename, reorder and region reprocessing.
+- Keep linked labels, mean/median lines, SD bands, legends and exports in sync with curve colors while preserving explicitly configured annotation colors. Color-only edits retain toolbar zoom/pan and do not change analysis data or results.
+- Unified web color pickers with default restoration and session persistence across hidden widgets; added missing ssNMR and TEM controls and separate ZetaSizer replicate colors.
+
 ## 0.9.1 — 2026-09-21
 
 - Moved the Lab DLS data list to the left and added per-measurement Hide/Exclude checkboxes. Exclusion immediately recomputes included counts, arithmetic averages, representative distributions and overlays without changing raw data. Saved libraries retain both flags and read older entries.
