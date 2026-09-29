@@ -2792,7 +2792,8 @@ class LabPlotterApp(tk.Tk):
         self.notebook = ttk.Notebook(self, style="LabPlotter.TNotebook")
         self.ftir = FTIRTab(self.notebook)
         self.nano = NanoDropTab(self.notebook)
-        self.nmr = SSNMRTab(self.notebook)
+        from .hnmr_ui import NMRWorkspace
+        self.nmr = NMRWorkspace(self.notebook)
         self.zeta = ZetaTab(self.notebook, ParticleLibrary())
         self.lab_dls = LabDLSTab(self.notebook)
         self.tem = TEMTab(self.notebook, TEMLibrary())

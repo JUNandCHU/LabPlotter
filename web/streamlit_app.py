@@ -333,7 +333,12 @@ def nanodrop_page() -> None:
 
 def nmr_page() -> None:
     from web.nmr_page import render_nmr_page
-    render_nmr_page(t, _show_figure, _ratio_controls)
+    from web.hnmr_page import render_hnmr_page
+    carbon, proton = st.tabs(["C NMR", "H NMR"])
+    with carbon:
+        render_nmr_page(t, _show_figure, _ratio_controls)
+    with proton:
+        render_hnmr_page(t, _show_figure, _plot_options)
 
 
 def lab_dls_page() -> None:

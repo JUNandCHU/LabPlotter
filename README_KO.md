@@ -1,6 +1,42 @@
-# LabPlotter 0.9.2
+# LabPlotter 0.10.0
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer, Lab DLS 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
+
+## 0.10.0 H NMR 정량 분석
+
+ssNMR 탭 안의 **C NMR / H NMR**에서 선택합니다. 기존 C NMR 비교/라이브러리는 그대로 유지됩니다.
+
+1. **H NMR → Import H NMR ASCII...**에서 복소수 TopSpin TXT/ASC를 가져옵니다. `LEFT / RIGHT / SIZE` 헤더와 `실수+허수i` 값, 또는 `ppm real imag` 헤더의 3열 표를 지원합니다. 기본 이름은 파일명입니다. 왼쪽 목록에서 선택·이름 변경·제거·순서 변경이 가능하고, 원본 실수부와 허수부는 수정하지 않습니다.
+2. 가져오면 자동 0차 위상 보정과 양 끝 구간의 강건 선형 baseline 보정을 미리보기합니다. 그래프 아래 체크박스로 각각 끄고 켭니다. **Phase override...**로 개별 위상각을 지정할 수 있고, 빈칸으로 저장하면 자동 보정으로 돌아갑니다. 위상 직접 지정은 그룹 전처리와 라이브러리에 유지됩니다. 그래프 기본 표시 범위는 -5~15 ppm입니다.
+3. **Preprocessing...**에서 수정 시료와 해당 미변형 PDA/ANP를 함께 활성화하고 **Get preprocessing condition → Apply common preprocessing**을 누릅니다. 첨부 파일 기준으로 공통 측정 범위 안의 -40~50 ppm, 약 0.0381753723 ppm grid를 제안합니다. 기본 phase/baseline은 켜고, Gaussian broadening과 shift alignment는 끕니다. baseline 후보 구간은 범위의 양 끝 12%씩입니다. 넓은 신호의 꼬리나 sideband가 들어가면 범위/비율을 조정하세요. 자동 phase가 항상 올바른 것은 아니므로 실수/허수 그래프를 확인하세요.
+4. 정량 모드에서는 최대값/면적 normalization을 하지 않습니다. 모든 데이터에 같은 조건을 적용하되 위상각과 shift는 각 데이터에 기록합니다. 수동 1차 위상은 전체 전처리 범위의 중심을 pivot으로 합니다. 선택형 정렬은 첫 활성 데이터 기준이며 실제 chemical shift 차이를 지울 수 있어 기본은 끕니다.
+5. **Parameter library...**에서 표준·core 용량·리간드·시료 질량을 편집/추가/삭제/순서 변경합니다. 주신 10개 질량과 `42565812.55 area = 1.861273386 mmol H`, PDA `0.0693`, ANP `0.1619 umol/mg`를 넣었습니다. 별도의 로컬 파일에 즉시 저장되므로 재시작/업데이트 후에도 유지됩니다. Lys는 분자량 146.19만 설정하고 질량/유효 H는 비워 뒀습니다.
+6. **Quantitative analysis...**에서 미변형 기준 시료, core·리간드, 질량, 표준·응답 배율, 적분 범위, 계산법을 검토하고 **Confirm parameters and calculate**를 눌러야 계산합니다. 저장된 공통 전처리를 사용할 때 두 시료는 같은 준비 그룹이어야 합니다. 체크 해제 시 두 시료를 새 공통 기본 조건으로 처리하며 현재 시료의 phase/baseline 토글 및 각자의 수동 위상각을 적용합니다. 임의로 바꾼 다른 전처리 조건은 저장된 그룹 사용에서만 적용됩니다.
+7. 결과는 오른쪽 그래프 아래 표에 표시합니다. **Calculation details...**는 공식·모든 입력값·실제 전처리·중간값·진단을, **Export processed CSV...**는 처리된 전체 좌표와 성분을 제공합니다. 색상/비율/범례/주석/복사/PNG·SVG·PDF는 공통 그래프 기능을 사용합니다.
+8. **Save to library**를 누르면 원본 복소수·이름·색상·전처리·계산 조건과 계산 기록을 저장합니다. 라이브러리는 준비 여부와 그룹을 표시하며 불러오기·이름 변경·삭제·순서 변경·JSON 이동을 지원합니다. 전처리/보정이 바뀌면 이전 결과는 지워 새 조건과 섞이지 않게 합니다. 표 행은 실제 글꼴 높이+여백으로 만들고, 가로/세로 스크롤 및 설정창 스크롤을 제공합니다.
+
+### 계산의 의미와 현재 표준값 확인 사항
+
+기본 `regions` 방법은 aliphatic **0~4.5 ppm**, aromatic **6~9 ppm**의 부호 있는 면적을 정확한 경계 보간과 사다리꼴 적분으로 구합니다. 이 창은 출발점이며 넓은 고체 H 신호 전체를 포괄한다고 보장하지 않습니다. aromatic 신호로 pristine core 기여를 스케일한 후 aliphatic 배경을 차감합니다. `mass` 방식은 대신 입력한 질량비로 core를 스케일합니다. 변형으로 core의 aromatic 신호 자체가 바뀌거나 리간드/물/NH가 겹치면 이 가정이 맞지 않을 수 있습니다.
+
+- `alpha = (I_aromatic,sample × sample_response) / (I_aromatic,core × core_response)`
+- `Delta I = I_aliphatic,sample × sample_response − alpha × I_aliphatic,core × core_response`
+- `n_H (umol) = Delta I / I_standard(intensity·ppm) × standard_mmol_H × 1000`
+- `n_ligand = n_H / effective_H`
+- `loading (umol/mg) = n_ligand / 입력 질량(mg)`
+- `apparent coverage (%) = 100 × loading / 최대 loading(umol/mg)`
+
+따라서 같은 pristine core를 자기 자신과 비교하면 자연스럽게 0이 됩니다. 유효 H 기본값 C6=13, C18=37, DMEN=10, Arg=7은 구조상 비교환성 H 수입니다. **선택 구간/분해 성분이 그 H를 얼마나 담는지 확인하고 필요한 경우 유효 H를 수정해야 합니다.** 공유결합 grafting만을 구분하는 측정은 아니므로 결과 이름은 *apparent ligand-equivalent coverage*입니다. 기본 질량은 주신 전체 시료 질량입니다. core 질량 기준 용량을 쓰려면 분모 질량을 그 기준에 맞게 직접 바꿉니다. 분자량으로 구하는 mg와 wt%는 원래 리간드 기준 환산량이며 결합 시 손실 원자의 질량을 자동 추정하지 않습니다.
+
+선택형 `gaussian` 방법은 중심이 aliphatic / 중간 gap / aromatic 구간 안에 있는 양수 Gaussian 세 성분을 전체 전처리 구간에서 피팅하고 각 성분의 꼬리까지 그 구간 안에서 적분합니다. 가운데 성분은 교환성/물/중첩 등의 nuisance 성분이며 특정 화학종이라고 확정하지 않습니다. 유일한 분해는 아니며, 피팅 R²·중심·폭·진폭을 계산 기록에서 검토합니다. 직접 영역 적분값도 항상 별도로 출력합니다. Gaussian 성분과 결과곡선은 그래프에서 확인하고 CSV로 검증할 수 있습니다.
+
+**현재 제공된 표준 면적의 단위와 export 배율은 확인되지 않았습니다.** `ppm` 해석과 응답계수 1은 잠정값입니다. 첨부 데이터에 이 값을 바로 적용하면 일부 coverage가 음수 또는 100%를 크게 초과합니다. 소프트웨어는 이 값을 0~100으로 잘라내지 않으며 경고합니다. 표준이 point sum이면 **표준 데이터 자체의 원래 ppm step**, Hz 적분이면 MHz를 입력하세요. TopSpin의 처리 scale, scan 수, receiver gain 등의 환산은 sample/core response multiplier에 반영해야 합니다. 내부 표준과 시료가 별도 측정이면 이 비교가 외부 검량에 해당하므로 동일한 정량 응답이 특히 필요합니다. 충분한 이완·정량 pulse sequence·시료 충전 등과 표준량의 `mmol H` 단위도 확인해야 합니다. C multiCP처럼 비정량적인 신호를 그대로 절대량으로 환산하지 마세요.
+
+표준 단위/배율, 정량 측정 조건, 유효 H 포괄 범위의 세 확인란이 모두 확인되기 전에는 결과를 **PROVISIONAL**로 표시합니다. 확인란을 켠다고 검량이 자동으로 검증되는 것은 아닙니다.
+
+웹도 같은 계산 엔진을 사용하며 C/H 탭, 데이터·전처리·정량 확인창·결과·그래프 설정을 제공합니다. 웹 데이터 및 파라미터는 세션 단위이므로 JSON 다운로드/다음 접속 시 가져오기를 사용합니다. 데스크톱은 로컬 영구 저장입니다.
+
+분자량 근거: [Hexylamine 101.19](https://www.sigmaaldrich.com/RW/en/product/mm/804326), [Octadecylamine 269.51](https://www.sigmaaldrich.com/RS/en/product/aldrich/305391), [DMEN 88.15](https://www.sigmaaldrich.com/AT/en/product/aldrich/d158003), [L-Arginine 174.20](https://www.sigmaaldrich.com/DO/en/product/sial/a5006), [L-Lysine 146.19](https://b2b.sigmaaldrich.com/US/en/product/sigma/l5501). 정량 조건 일반 안내: [BIPM qNMR](https://www.bipm.org/en/organic-analysis/qnmr). 자동 위상 방법 참고: [nmrglue autophase](https://nmrglue.readthedocs.io/en/latest/reference/proc_autophase.html). LabPlotter는 자체 SciPy 기반 ACME 스타일 0차 목적함수를 사용하며 nmrglue 구현과 동일하지 않습니다.
 
 ## 0.9.2 곡선별 색상 설정
 

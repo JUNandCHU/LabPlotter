@@ -245,6 +245,13 @@ def detect_builtin_kind(path: str | Path) -> str | None:
     if suffix in {".tif", ".tiff"}:
         return "TEM"
     if suffix in {".csv", ".tsv", ".txt", ".asc"}:
+        # Complex proton exports carry their own ppm axis in the header.
+        from .hnmr import parse_hnmr_ascii
+        try:
+            parse_hnmr_ascii(path)
+            return "ssNMR"
+        except (ValueError, OSError):
+            pass
         from .lab_dls import is_dls_header
         rows = _delimited_rows(path)
         first = next((row for row in rows if any(v.strip() for v in row)), [])

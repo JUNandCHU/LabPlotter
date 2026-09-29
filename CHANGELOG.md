@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 — 2026-09-29
+
+- Preserve C NMR under an ssNMR subtab and add complex H NMR import with immutable real/imaginary inputs, automatic zero-order phase, optional manual phase, baseline switches and common non-normalizing preprocessing.
+- Add independent persistent complex-spectrum and quantitative-parameter libraries, group preparation status, editable calibration/core/ligand/mass presets, and JSON portability. Lys defaults contain MW only.
+- Add confirmation-before-calculation, pristine-core corrected region areas, optional exploratory three-band Gaussian decomposition, apparent ligand coverage/loading/mass equivalents, signed out-of-range diagnostics, complete formula/input/processing audit and processed CSV export.
+- Keep absolute results explicitly provisional until standard area units/response and effective H assignments are verified; never clamp negative or >100% results.
+- Reuse shared desktop curve colors, legend editing, graph ratios, clipboard and exports; use font-aware rows and scrolling forms. Add the browser companion and quantitative/UI regression tests.
+
 ## 0.9.2 — 2026-09-24
 
 - Added a shared Curve colors page to every desktop plot's settings, with native RGB selection, HEX/name input, live/manual apply, color swatches, per-curve/default restoration and font-sized scrollable rows.
