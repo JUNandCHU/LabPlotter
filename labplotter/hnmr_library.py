@@ -56,7 +56,7 @@ PARAMETER_FIELDS = {
                   ("verified", "Area basis and scale verified", "bool")],
     "cores": [("name", "Core name", "text"), ("capacity", "Maximum loading (umol/mg)", "positive")],
     "ligands": [("name", "Ligand name", "text"), ("mw", "Parent molecular weight (g/mol)", "positive"),
-                ("effective_h", "Effective non-exchangeable H (blank allowed)", "optional")],
+                ("effective_h", "H atoms represented per ligand (blank allowed)", "optional")],
     "samples": [("name", "Sample identity", "text"), ("mass_mg", "Entered mass (mg)", "positive")],
 }
 

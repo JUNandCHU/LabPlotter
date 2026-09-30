@@ -12,7 +12,9 @@ import numpy as np
 from .i18n import tr, localize_widget_tree
 from .hnmr import (HNMRSettings, QuantSettings, common_settings, infer_identity,
                    parse_hnmr_ascii, prepare_spectra, preview_spectrum, quant_defaults,
-                   quantify, result_csv)
+                   quantify, result_csv, restored_quant_settings)
+from .hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv)
+from .hnmr_plot import ROLES, draw_hnmr
 from .hnmr_library import (HNMRLibrary, HNMRParameterLibrary, PARAMETER_FIELDS,
                            export_hnmr_library, import_hnmr_library, validate_parameters)
 from .nmr_ui import SSNMRTab, nmr_tree_style, save_text
@@ -48,7 +50,7 @@ class Fields(ttk.Frame):
         window = self.canvas.create_window((0, 0), window=body, anchor="nw")
         body.bind("<Configure>", lambda _: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda event: self.canvas.itemconfigure(window, width=event.width))
-        body.columnconfigure(1, weight=1)
+        body.columnconfigure(1, weight=1, minsize=170)
         for i, (key, label, kind) in enumerate(specs):
             value = values.get(key)
             var = tk.BooleanVar(value=bool(value)) if kind == "bool" else tk.StringVar(value="" if value is None else str(value))
@@ -273,8 +275,8 @@ QUANT_SAMPLE = [("core", "Core", "text"), ("ligand", "Ligand / hypothetical liga
                 ("reference_mass_mg", "Pristine reference mass (mg)", "optional"),
                 ("capacity_umol_mg", "Core maximum loading (umol/mg)", "number"),
                 ("molecular_weight", "Parent ligand MW (g/mol)", "number"),
-                ("effective_h", "Effective H represented by quantified band", "optional"),
-                ("core_scaling", "Core scaling method", ("aromatic", "mass")),
+                ("effective_h", "H atoms represented per ligand (not particle mass)", "optional"),
+                ("sample_core_mass_mg", "Known core mass in sample (mg; blank = total mass approximation)", "optional"),
                 ("use_prepared", "Use saved common preprocessing", "bool")]
 QUANT_CALIBRATION = [("standard_area", "Internal standard area", "number"),
                      ("standard_mmol_h", "Internal standard amount (mmol H)", "number"),
@@ -285,12 +287,117 @@ QUANT_CALIBRATION = [("standard_area", "Internal standard area", "number"),
                      ("reference_response_factor", "Core response multiplier to standard scale", "number"),
                      ("calibration_verified", "Standard area unit and scale verified", "bool"),
                      ("acquisition_verified", "Quantitative acquisition / response verified", "bool")]
-QUANT_REGIONS = [("aliphatic_min", "Aliphatic minimum (ppm)", "number"),
-                 ("aliphatic_max", "Aliphatic maximum (ppm)", "number"),
-                 ("aromatic_min", "Aromatic minimum (ppm)", "number"),
-                 ("aromatic_max", "Aromatic maximum (ppm)", "number"),
-                 ("method", "Area method: regions / three-band Gaussian", ("regions", "gaussian")),
-                 ("assignments_verified", "Band capture / effective proton count verified", "bool")]
+DECOMPOSITION_FIELDS = [("fit_min", "Fit / component integration minimum (ppm)", "number"),
+                        ("fit_max", "Fit / component integration maximum (ppm)", "number"),
+                        ("aliphatic_min", "Aliphatic center lower bound (ppm)", "number"),
+                        ("aliphatic_max", "Aliphatic center upper bound (ppm)", "number"),
+                        ("aromatic_min", "Aromatic center lower bound (ppm)", "number"),
+                        ("aromatic_max", "Aromatic center upper bound (ppm)", "number"),
+                        ("fwhm_min", "Minimum component FWHM (ppm)", "number"),
+                        ("fwhm_max", "Maximum component FWHM (ppm)", "number"),
+                        ("line_shape", "Component line shape", ("pseudo_voigt", "gaussian", "lorentzian")),
+                        ("overlap_band", "Add unassigned overlap band between center ranges", "bool")]
+QUANT_REGIONS = DECOMPOSITION_FIELDS + [("assignments_verified", "Component assignments, H count and core model reviewed", "bool")]
+
+
+class HDecompositionStyle:
+    title = "H NMR decomposition"
+
+    def __init__(self, owner):
+        self.owner = owner; self.vars = {}
+
+    def build(self, parent):
+        self.sample = self.owner.current(); self.vars = {}
+        if not self.sample:
+            ttk.Label(parent, text="Select a spectrum first.").pack(); return
+        ttk.Label(parent, text="Colors: use the shared Curve colors page. Width, style and visibility below apply to the selected sample and its saved library entry.\nCopy and save include exactly the visible decomposition layers.", wraplength=600).pack(anchor="w", pady=8)
+        form = ttk.Frame(parent); form.pack(fill="x")
+        for i, text in enumerate(("Curve", "Visible", "Width (blank = common)", "Style")):
+            ttk.Label(form, text=text).grid(row=0, column=i, padx=5, pady=5)
+        styles = self.sample.metadata.get("decomposition_styles", {})
+        for i, (key, label, _, default) in enumerate(ROLES, 1):
+            saved = styles.get(key, {})
+            variables = {"visible": tk.BooleanVar(value=saved.get("visible", True)),
+                         "width": tk.StringVar(value=saved.get("width") or ""),
+                         "line_style": tk.StringVar(value=saved.get("line_style", default))}
+            self.vars[key] = variables
+            ttk.Label(form, text=label).grid(row=i, column=0, sticky="w", padx=5, pady=5)
+            ttk.Checkbutton(form, variable=variables["visible"]).grid(row=i, column=1)
+            ttk.Entry(form, textvariable=variables["width"], width=12).grid(row=i, column=2)
+            ttk.Combobox(form, textvariable=variables["line_style"], values=("-", "--", ":", "-."), state="readonly", width=8).grid(row=i, column=3)
+        self.fill = tk.BooleanVar(value=self.sample.metadata.get("decomposition_fill", False))
+        ttk.Checkbutton(parent, text="Shade fitted component areas", variable=self.fill).pack(anchor="w", pady=8)
+        self.error = ttk.Label(parent, foreground="#a00000"); self.error.pack(anchor="w")
+
+    def variables(self):
+        return [v for row in self.vars.values() for v in row.values()]+([self.fill] if hasattr(self, 'fill') else [])
+
+    def apply(self):
+        if not self.vars: return
+        try:
+            styles = {}
+            for key, row in self.vars.items():
+                width = float(row['width'].get()) if row['width'].get().strip() else None
+                if width is not None and (not np.isfinite(width) or not 0 < width <= 20): raise ValueError()
+                styles[key] = {'visible': row['visible'].get(), 'width': width, 'line_style': row['line_style'].get()}
+        except ValueError:
+            self.error.configure(text="Width must be 0–20 or blank."); return
+        self.error.configure(text="")
+        self.sample.metadata.update(decomposition_styles=styles, decomposition_fill=self.fill.get())
+        self.owner.plot.refresh()
+
+    def restore_defaults(self):
+        for key, _, _, default in ROLES:
+            if key in self.vars:
+                self.vars[key]['visible'].set(True); self.vars[key]['width'].set(''); self.vars[key]['line_style'].set(default)
+        if hasattr(self, 'fill'): self.fill.set(False)
+        self.apply()
+
+
+class HDecompositionDialog(tk.Toplevel):
+    def __init__(self, workspace, sample):
+        from .ui import PlotPane
+        super().__init__(workspace); _window(self, "H NMR decomposition", "1350x830")
+        self.workspace, self.sample = workspace, sample
+        self.processed = workspace.processed(sample); self.fit = None
+        self.columnconfigure(0, weight=1); self.rowconfigure(1, weight=1)
+        ttk.Label(self, text="Fit the processed spectrum first. Center bounds guide assignment; component integrals include overlapping tails across the entire fit range. An optional middle band is excluded from ligand area.", wraplength=1220, padding=10).grid(row=0, column=0, sticky="ew")
+        panes = ttk.Panedwindow(self, orient='horizontal'); panes.grid(row=1, column=0, sticky='nsew')
+        settings = DecompositionSettings(**sample.metadata.get('decomposition_settings', {}))
+        self.form = Fields(panes, DECOMPOSITION_FIELDS, asdict(settings)); panes.add(self.form, weight=0)
+        self.form.canvas.configure(width=550)
+        self.plot = PlotPane(panes, self.draw, PlotOptions('Chemical shift', 'ppm', 'Intensity', 'a.u.', reverse_x=True), compact=True, export_current_view=True)
+        self.plot.vars['x_min'].set('-10'); self.plot.vars['x_max'].set('20'); panes.add(self.plot, weight=1)
+        self.status = tk.StringVar(value='Fit and inspect both the component curves and residual before accepting assignments.')
+        ttk.Label(self, textvariable=self.status, wraplength=1230, padding=8).grid(row=2, column=0, sticky='ew')
+        actions = ttk.Frame(self, padding=8); actions.grid(row=3, column=0, sticky='ew')
+        ttk.Button(actions, text='Fit and preview', command=self.preview).pack(side='left', padx=4)
+        ttk.Button(actions, text='Apply decomposition to spectrum', command=self.apply).pack(side='left', padx=4)
+        ttk.Button(actions, text='Close', command=self.destroy).pack(side='right')
+        self.plot.refresh()
+
+    def draw(self, axis, options):
+        draw_hnmr(axis, self.sample, self.processed, options, self.fit)
+
+    def preview(self):
+        try:
+            self.fit = decompose(self.processed, DecompositionSettings(**self.form.values()))
+            self.plot.refresh()
+            a = self.fit.areas
+            self.status.set(f"R2 = {self.fit.audit['fit_R2']:.6f} | Aliphatic area = {a['aliphatic']:.7g} | Aromatic area = {a['aromatic']:.7g} intensity*ppm\n"+
+                            ('; '.join(self.fit.warnings) if self.fit.warnings else 'Inspect residual and chemical assignments; high R2 alone does not establish a unique decomposition.'))
+        except Exception as exc: self.fit = None; self.plot.refresh(); self.status.set(str(exc))
+
+    def apply(self):
+        try:
+            settings = DecompositionSettings(**self.form.values()).validate()
+            if self.fit is None or asdict(settings) != self.fit.audit['settings']:
+                raise ValueError('Fit and preview the current settings before applying.')
+            self.workspace.invalidate_all(fits=False)
+            self.sample.metadata.update(decomposition=self.fit.record(), decomposition_settings=asdict(settings))
+            self.workspace.fits[self.sample.uid] = self.fit
+            self.workspace._refresh(); self.destroy()
+        except Exception as exc: self.status.set(str(exc))
 
 
 class QuantDialog(tk.Toplevel):
@@ -300,9 +407,7 @@ class QuantDialog(tk.Toplevel):
         self.workspace, self.sample = workspace, sample
         self.columnconfigure(0, weight=1); self.rowconfigure(2, weight=1)
         self.parameters = workspace.parameters.load()
-        q = quant_defaults(sample, self.parameters)
-        if sample.metadata.get("analysis_parameters"):
-            q = QuantSettings(**sample.metadata["analysis_parameters"])
+        q = restored_quant_settings(sample, self.parameters)
         ttk.Label(self, text="Sample: " + sample.name, padding=10, wraplength=980).grid(row=0, column=0, sticky="ew")
         top = ttk.Frame(self, padding=8); top.grid(row=1, column=0, sticky="ew")
         ttk.Label(top, text="Pristine core reference").grid(row=0, column=0, sticky="w")
@@ -326,8 +431,8 @@ class QuantDialog(tk.Toplevel):
         p = sample.processing
         ttk.Label(self, text=f"Saved preprocessing: {'prepared, group '+p.get('group_id','')[:8] if p.get('prepared') else 'not prepared'}. "
                   "If unchecked, both spectra are freshly processed on a common default grid using the sample's phase/baseline switches.\n"
-                  "Region mode subtracts pristine-core aliphatic background scaled by the aromatic band. Gaussian mode is a 3-band model with a middle nuisance band.\n"
-                  "Default masses are weighed sample masses. Enter core mass instead if your capacity model uses core mass. Unknown calibration remains provisional.",
+                  "Both spectra are decomposed with the same model. Core background uses entered masses; aromatic intensity is not a mass proxy.\n"
+                  "H per ligand is proton stoichiometry. Absolute coverage is withheld until calibration, acquisition and assignments are reviewed; component areas are always shown.",
                   wraplength=980, padding=10).grid(row=3, column=0, sticky="ew")
         self.status = tk.StringVar()
         ttk.Label(self, textvariable=self.status, foreground="#AE2C28", wraplength=980, padding=6).grid(row=4, column=0, sticky="ew")
@@ -371,6 +476,8 @@ class QuantDialog(tk.Toplevel):
             self.sample.metadata["analysis_parameters"] = asdict(q)
             self.sample.metadata["analysis_audit"] = result.audit
             self.workspace.results[self.sample.uid] = result
+            self.sample.metadata.update(decomposition=result.sample_fit.record(), decomposition_settings=result.sample_fit.audit["settings"])
+            self.workspace.fits[self.sample.uid] = result.sample_fit
             self.workspace._refresh(); self.destroy()
         except Exception as exc: self.status.set(str(exc))
 
@@ -434,13 +541,13 @@ class HNMRTab(ttk.Frame):
         from .ui import PlotPane
         super().__init__(parent)
         self.library = library or HNMRLibrary(); self.parameters = parameters or HNMRParameterLibrary()
-        self.spectra = []; self.results = {}; self.cache = {}; self.library_window = None; self.parameter_window = None
+        self.spectra = []; self.results = {}; self.fits = {}; self.cache = {}; self.library_window = None; self.parameter_window = None
         panes = ttk.Panedwindow(self, orient="horizontal"); panes.pack(fill="both", expand=True)
         left = ttk.Frame(panes, padding=8, width=320); right = ttk.Frame(panes, padding=5)
         panes.add(left, weight=0); panes.add(right, weight=1)
         for label, command in (("Import H NMR ASCII...", self.add_dialog), ("Open H NMR library...", self.open_library),
                                ("Parameter library...", self.open_parameters), ("Preprocessing...", self.preprocessing),
-                               ("Quantitative analysis...", self.analyze)):
+                               ("Decompose spectrum...", self.decompose_dialog), ("Quantitative analysis...", self.analyze)):
             ttk.Button(left, text=tr(label), command=command).pack(fill="x", pady=3)
         actions = ttk.Frame(left); actions.pack(fill="x", pady=3)
         for label, command in (("Save to library", self.save), ("Rename...", self.rename), ("Remove", self.remove)):
@@ -457,7 +564,8 @@ class HNMRTab(ttk.Frame):
         vertical = ttk.Panedwindow(right, orient="vertical"); vertical.pack(fill="both", expand=True)
         graph = ttk.Frame(vertical); lower = ttk.LabelFrame(vertical, text="Quantitative results", padding=5)
         vertical.add(graph, weight=4); vertical.add(lower, weight=1)
-        self.plot = PlotPane(graph, self._draw, PlotOptions("Chemical shift", "ppm", "Intensity", "a.u.", reverse_x=True), compact=True)
+        self.plot = PlotPane(graph, self._draw, PlotOptions("Chemical shift", "ppm", "Intensity", "a.u.", reverse_x=True), compact=True, export_current_view=True)
+        self.plot.settings_extension = HDecompositionStyle(self)
         self.plot.vars["x_min"].set("-5"); self.plot.vars["x_max"].set("15")
         self.plot.pack(fill="both", expand=True)
         controls = ttk.Frame(graph, padding=4); controls.pack(side="bottom", before=self.plot, fill="x")
@@ -466,7 +574,7 @@ class HNMRTab(ttk.Frame):
         for label, var, command in (("Phase correction", self.phase, self.correction_changed),
                                      ("Baseline correction", self.baseline, self.correction_changed),
                                      ("Imaginary", self.show_imag, self.plot.refresh),
-                                     ("Core / excess / fit", self.show_components, self.plot.refresh)):
+                                     ("Show decomposition", self.show_components, self.components_changed)):
             ttk.Checkbutton(controls, text=tr(label), variable=var, command=command).pack(side="left", padx=4)
         ttk.Button(controls, text="Phase override...", command=self.phase_override).pack(side="left", padx=5)
         _wrap_controls(controls)
@@ -510,9 +618,12 @@ class HNMRTab(ttk.Frame):
         for s in self.spectra: self.tree.insert("", "end", iid=s.uid, values=(s.name, "Prepared" if s.processing.get("prepared") else "Preview"))
         self.tree.selection_set([uid for uid in ids if self.tree.exists(uid)])
 
-    def invalidate_all(self):
+    def invalidate_all(self, fits=True):
         self.results.clear(); self.cache.clear()
-        for s in self.spectra: s.metadata.pop("analysis_audit", None)
+        if fits: self.fits.clear()
+        for s in self.spectra:
+            s.metadata.pop("analysis_audit", None)
+            if fits: s.metadata.pop("decomposition", None)
 
     def remove(self):
         ids = self.tree.selection(); self.spectra = [s for s in self.spectra if s.uid not in ids]
@@ -552,6 +663,24 @@ class HNMRTab(ttk.Frame):
     def preprocessing(self):
         if self.spectra: HPreprocessingDialog(self)
         else: self.status.set("Import H NMR spectra first.")
+
+    def decompose_dialog(self):
+        s = self.current()
+        if s: HDecompositionDialog(self, s)
+        else: self.status.set("Select one spectrum first.")
+
+    def components_changed(self):
+        s = self.current()
+        if s: s.metadata["show_decomposition"] = self.show_components.get()
+        self.plot.refresh()
+
+    def fitted(self, s):
+        result = self.results.get(s.uid)
+        if result: return result.sample_fit
+        fit = restore_decomposition(self.processed(s), s.metadata.get("decomposition"))
+        if fit: self.fits[s.uid] = fit
+        else: self.fits.pop(s.uid, None)
+        return fit
 
     def analyze(self):
         s = self.current()
@@ -600,17 +729,7 @@ class HNMRTab(ttk.Frame):
             axis.text(.5, .5, "Import complex H NMR ASCII data", transform=axis.transAxes, ha="center"); return
         result = self.results.get(s.uid)
         p = result.sample if result else self.processed(s)
-        colors = s.metadata.setdefault("curve_colors", {})
-        def line(key, label, y, index, style="-"):
-            color = curve_color(axis, s.uid+":"+key, label, SERIES_PALETTE[index], colors, key)
-            axis.plot(p.x, y, color=color, linewidth=options.line_width, linestyle=style, label=label)
-        response = result.parameters["response_factor"] if result else 1.
-        line("real", s.name, p.y*response, 0)
-        if self.show_imag.get(): line("imag", "Corrected imaginary", p.imaginary*response, 3, "--")
-        if result and self.show_components.get():
-            line("core", "Scaled pristine core", result.core_curve, 2, "--")
-            line("excess", "Excess above core", result.excess_curve, 1)
-            for i, y in enumerate(result.components): line("fit"+str(i), ("Aliphatic fit", "Middle-band fit", "Aromatic fit")[i], y*response, i+4, ":")
+        draw_hnmr(axis, s, p, options, self.fitted(s), self.show_components.get(), self.show_imag.get(), self.plot.register_overlay)
 
     def _refresh(self):
         if not hasattr(self, "plot"): return
@@ -618,26 +737,28 @@ class HNMRTab(ttk.Frame):
         if s:
             try:
                 self.processed(s)
+                self.show_components.set(s.metadata.get("show_decomposition", True))
                 self.phase.set(s.processing["settings"]["phase"]); self.baseline.set(s.processing["settings"]["baseline"])
                 self.status.set(f"{s.name}\n{len(s.x):,} complex points | p0 = {(s.processing.get('phase0') or 0):.3g} deg\n"+
                                 ("Common preprocessing prepared" if s.processing.get("prepared") else "Preview corrections; common preprocessing not prepared"))
             except Exception as exc: self.status.set(str(exc)); return
         self.plot.refresh(); self.result_tree.delete(*self.result_tree.get_children())
         result = self.results.get(s.uid) if s else None
-        if not result:
-            self.result_status.set("No current result. Confirm parameters to calculate."); return
-        ordered = ["apparent_coverage_percent", "ligand_umol", "loading_umol_mg", "aliphatic_integral", "aromatic_integral"]
-        for key in ordered+[k for k in result.values if k not in ordered]:
-            value = result.values[key]
-            self.result_tree.insert("", "end", values=(key.replace("_", " "), "Undefined" if value is None else f"{value:.10g}"))
-        self.result_status.set("PROVISIONAL / inspect warnings in Calculation details" if any(w.startswith("PROVISIONAL") for w in result.warnings)
-                               else "Apparent coverage; inspect model / range diagnostics")
-        if not 0 <= result.values["apparent_coverage_percent"] <= 100:
-            self.result_status.set("Outside 0-100%: inspect calibration / model. " + self.result_status.get())
+        fit = self.fitted(s) if s else None
+        if not result and not fit:
+            self.result_status.set("Decompose spectrum to inspect components before quantitative analysis."); return
+        values = result.values if result else decomposition_values(fit)
+        ordered = ["aliphatic_integral", "aromatic_integral", "aliphatic_aromatic_ratio", "aliphatic_signal_fraction_percent", "sample_fit_R2"]
+        if result: ordered += ["apparent_coverage_percent", "ligand_umol", "loading_umol_mg"]
+        for key in ordered+[k for k in values if k not in ordered]:
+            value = values[key]
+            self.result_tree.insert("", "end", values=(key.replace("_", " "), "Withheld / undefined" if value is None else f"{value:.10g}"))
+        self.result_status.set(result.quantitative_status if result else "Decomposed signal areas; signal fraction is not surface coverage.")
 
     def audit(self):
         s = self.current(); result = self.results.get(s.uid) if s else None
-        content = result.audit if result else s.metadata.get("analysis_audit") if s else None
+        fit = self.fitted(s) if s else None
+        content = result.audit if result else json.dumps(fit.audit, indent=2, ensure_ascii=False) if fit else None
         if not content: return
         dialog = tk.Toplevel(self); _window(dialog, "H NMR calculation details")
         ttk.Button(dialog, text="Save complete calculation record...", command=lambda: save_text(dialog, content, "H_NMR_calculation.txt")).pack(anchor="w", padx=8, pady=8)
@@ -646,7 +767,8 @@ class HNMRTab(ttk.Frame):
 
     def export_result(self):
         s = self.current(); result = self.results.get(s.uid) if s else None
-        if result: save_text(self, result_csv(result), "H_NMR_processed.csv", ".csv")
+        fit = self.fitted(s) if s else None
+        if result or fit: save_text(self, result_csv(result) if result else decomposition_csv(fit), "H_NMR_decomposition.csv", ".csv")
 
 
 class NMRWorkspace(ttk.Frame):

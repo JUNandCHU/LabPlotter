@@ -8,7 +8,12 @@ from pathlib import Path
 import numpy as np
 import streamlit as st
 from labplotter.hnmr import (HNMRSettings, QuantSettings, common_settings, default_parameters,
-    infer_identity, parse_hnmr_text, prepare_spectra, preview_spectrum, quant_defaults, quantify, result_csv)
+    infer_identity, parse_hnmr_text, prepare_spectra, preview_spectrum, quant_defaults, quantify, result_csv, restored_quant_settings)
+from labplotter.hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv)
+from labplotter.hnmr_plot import ROLES, draw_hnmr
+from matplotlib.figure import Figure
+from labplotter.plotting import apply_origin_style
+from labplotter.web import _style_legend
 from labplotter.hnmr_library import export_hnmr_library, import_hnmr_library, validate_parameters
 from labplotter.models import Spectrum
 from labplotter.web import spectra_figure
@@ -16,9 +21,11 @@ from labplotter.plotting import SERIES_PALETTE
 from color_controls import series_colors
 
 
-def _invalidate():
+def _invalidate(fits=True):
     st.session_state['_hnmr_results'] = {}
-    for s in st.session_state.get('_hnmr_spectra', []): s.metadata.pop('analysis_audit', None)
+    for s in st.session_state.get('_hnmr_spectra', []):
+        s.metadata.pop('analysis_audit', None)
+        if fits: s.metadata.pop('decomposition', None)
 
 
 def _merge(target, spectra):
@@ -37,6 +44,9 @@ def _render_dialog():
     if dialog == 'library': library_dialog()
     elif dialog == 'parameters': parameter_dialog()
     elif dialog == 'preprocessing': preprocessing_dialog()
+    elif dialog == 'decomposition':
+        s = next((v for v in st.session_state['_hnmr_spectra'] if v.uid == st.session_state.get('h-selected')), None)
+        if s: decomposition_dialog(s)
     elif dialog == 'quantitative':
         s = next((v for v in st.session_state['_hnmr_spectra'] if v.uid == st.session_state.get('h-selected')), None)
         if s: quant_dialog(s)
@@ -127,7 +137,7 @@ def preprocessing_dialog():
 @st.dialog('Confirm H NMR quantitative analysis', width='large', on_dismiss=_close_dialog)
 def quant_dialog(s):
     spectra = st.session_state['_hnmr_spectra']; params = st.session_state['_hnmr_parameters']
-    q = QuantSettings(**s.metadata['analysis_parameters']) if s.metadata.get('analysis_parameters') else quant_defaults(s, params)
+    q = restored_quant_settings(s, params)
     st.write('Sample: '+s.name)
     defaults = asdict(q)
     cols = st.columns(3)
@@ -154,14 +164,15 @@ def quant_dialog(s):
                           format_func=lambda u: next(v.name for v in spectra if v.uid == u), key='h-q-reference-'+s.uid)
     with st.form('h-quant-form'):
         values = {}; cols = st.columns(2)
-        choices = {'standard_basis':('ppm','point_sum','hz'), 'core_scaling':('aromatic','mass'), 'method':('regions','gaussian')}
+        choices = {'standard_basis':('ppm','point_sum','hz'), 'line_shape':('pseudo_voigt','gaussian','lorentzian')}
+        defaults.pop('core_scaling', None); defaults.pop('method', None)
         for i, (key, value) in enumerate(defaults.items()):
-            widget_key = 'h-q-'+s.uid+'-'+key; label = key.replace('_', ' ')
+            widget_key = 'h-q-'+s.uid+'-'+key; label = {'effective_h':'H atoms represented per ligand (not particle mass)', 'sample_core_mass_mg':'Known core mass (mg; blank = total mass approximation)'}.get(key, key.replace('_', ' '))
             target = cols[i%2]
             if isinstance(value, bool): values[key] = target.checkbox(label, value, key=widget_key)
             elif key in choices: values[key] = target.selectbox(label, choices[key], index=choices[key].index(value), key=widget_key)
             else: values[key] = target.text_input(label, '' if value is None else str(value), key=widget_key)
-        st.caption('Default masses are weighed sample masses. Coverage is provisional until standard units, acquisition response and effective proton capture are verified. Gaussian decomposition is a model estimate.')
+        st.caption('Both spectra are decomposed using the same model. Center bounds are not integration cutoffs. Entered masses scale pristine-core background; aromatic intensity does not estimate mass. Absolute coverage is withheld until calibration, acquisition and component assignments are reviewed.')
         if st.form_submit_button('Confirm parameters and calculate H NMR'):
             try:
                 for key, value in values.items():
@@ -172,7 +183,30 @@ def quant_dialog(s):
                 if modified or (inferred and inferred != values['core']): raise ValueError('Select a matching pristine core reference.')
                 result = quantify(s, ref, QuantSettings(**values))
                 st.session_state['_hnmr_results'][s.uid] = result
-                s.metadata.update(analysis_parameters=values, analysis_audit=result.audit)
+                s.metadata.update(analysis_parameters=asdict(QuantSettings(**values)), analysis_audit=result.audit, decomposition=result.sample_fit.record(), decomposition_settings=result.sample_fit.audit["settings"])
+                _close_dialog(); st.rerun()
+            except Exception as exc: st.error(str(exc))
+
+
+@st.dialog('H NMR decomposition', width='large', on_dismiss=_close_dialog)
+def decomposition_dialog(s):
+    settings = DecompositionSettings(**s.metadata.get('decomposition_settings', {}))
+    st.write('Fit the processed spectrum with aliphatic and aromatic envelopes. The center bounds guide assignments; areas include overlapping tails over the entire fit range. An optional overlap band remains unassigned.')
+    with st.form('h-decomposition-form'):
+        values = {}; cols = st.columns(2)
+        for i, (key, value) in enumerate(asdict(settings).items()):
+            label = key.replace('_', ' ')
+            if 'aliphatic' in key or 'aromatic' in key: label += ' (center bound, ppm)'
+            if isinstance(value, bool): values[key] = cols[i%2].checkbox(label, value, key='h-fit-'+key)
+            elif key == 'line_shape':
+                choices = ('pseudo_voigt','gaussian','lorentzian')
+                values[key] = cols[i%2].selectbox(label, choices, index=choices.index(value), key='h-fit-'+key)
+            else: values[key] = cols[i%2].number_input(label, value=float(value), key='h-fit-'+key)
+        if st.form_submit_button('Fit and overlay H NMR'):
+            try:
+                fit = decompose(preview_spectrum(s), DecompositionSettings(**values))
+                _invalidate(fits=False)
+                s.metadata.update(decomposition=fit.record(), decomposition_settings=values)
                 _close_dialog(); st.rerun()
             except Exception as exc: st.error(str(exc))
 
@@ -209,6 +243,7 @@ def render_hnmr_page(t, show_figure, plot_options):
             st.success('Saved in this session.')
         if st.button('Remove H NMR from list', key='h-remove'):
             spectra[:] = [v for v in spectra if v.uid != uid]; _invalidate(); st.rerun()
+        if st.button('Decompose spectrum', key='h-decomposition'): st.session_state['_hnmr_dialog'] = 'decomposition'
         if st.button('Quantitative analysis', key='h-quantitative'): st.session_state['_hnmr_dialog'] = 'quantitative'
     with right:
         try: preview = preview_spectrum(s)
@@ -218,7 +253,8 @@ def render_hnmr_page(t, show_figure, plot_options):
         phase = switches[0].checkbox('H NMR phase correction', s.processing['settings']['phase'], key='h-phase-'+uid)
         baseline = switches[1].checkbox('H NMR baseline correction', s.processing['settings']['baseline'], key='h-baseline-'+uid)
         imag = switches[2].checkbox('Imaginary', False, key='h-imag-'+uid)
-        components = switches[3].checkbox('Core / excess / fit', True, key='h-components-'+uid)
+        components = switches[3].checkbox('Show decomposition', s.metadata.get('show_decomposition', True), key='h-components-'+uid)
+        s.metadata['show_decomposition'] = components
         if (phase, baseline) != (s.processing['settings']['phase'], s.processing['settings']['baseline']):
             s.processing['settings'].update(phase=phase, baseline=baseline)
             s.processing.update(prepared=False, group_id=''); _invalidate(); preview = preview_spectrum(s)
@@ -234,26 +270,39 @@ def render_hnmr_page(t, show_figure, plot_options):
                 except ValueError as exc: st.error(str(exc))
         result = st.session_state['_hnmr_results'].get(uid)
         p = result.sample if result else preview
-        response = result.parameters['response_factor'] if result else 1.
-        series = [Spectrum(s.name, p.x, p.y*response, uid=uid+':real')]
-        defaults = {uid+':real': SERIES_PALETTE[0]}
-        if imag:
-            series.append(Spectrum('Corrected imaginary', p.x, p.imaginary*response, uid=uid+':imag')); defaults[uid+':imag'] = SERIES_PALETTE[3]
-        if result and components:
-            series.extend([Spectrum('Scaled pristine core',p.x,result.core_curve,uid=uid+':core'), Spectrum('Excess above core',p.x,result.excess_curve,uid=uid+':excess')])
-            defaults.update({uid+':core':SERIES_PALETTE[2],uid+':excess':SERIES_PALETTE[1]})
-            for i, curve in enumerate(result.components):
-                series.append(Spectrum(('Aliphatic fit','Middle-band fit','Aromatic fit')[i],p.x,curve*response,uid=uid+':fit'+str(i)))
-                defaults[uid+':fit'+str(i)] = SERIES_PALETTE[i+4]
-        colors = series_colors(t, [(v.uid,v.name) for v in series], 'hnmr', defaults)
+        fit = result.sample_fit if result else restore_decomposition(p, s.metadata.get('decomposition'))
+        active = ['real']+(['imag'] if imag else [])
+        if fit and components: active += [*fit.curves, 'total', 'residual']
+        labels = {key: label for key, label, _, _ in ROLES}
+        defaults = {uid+':'+key: s.metadata.get('curve_colors', {}).get(key, SERIES_PALETTE[index]) for key, _, index, _ in ROLES}
+        colors = series_colors(t, [(uid+':'+key, s.name if key == 'real' else labels[key]) for key in active], 'hnmr', defaults)
+        s.metadata.setdefault('curve_colors', {}).update({key.split(':')[-1]: value for key, value in colors.items()})
+        with st.expander('H NMR decomposition line styles'):
+            styles = s.metadata.setdefault('decomposition_styles', {})
+            for key, label, _, default in ROLES:
+                if key not in active: continue
+                old = styles.get(key, {}); cols = st.columns([2, 1, 1])
+                visible = cols[0].checkbox(label, old.get('visible', True), key='h-style-visible-'+uid+key)
+                width = cols[1].number_input('Width: '+label, min_value=0., max_value=20., value=float(old.get('width') or 0), key='h-style-width-'+uid+key, help='0 uses the common graph width.')
+                choices = ('-', '--', ':', '-.')
+                style = cols[2].selectbox('Style: '+label, choices, index=choices.index(old.get('line_style', default)), key='h-style-line-'+uid+key)
+                styles[key] = {'visible':visible,'width':width or None,'line_style':style}
+            s.metadata['decomposition_fill'] = st.checkbox('Shade fitted component areas', s.metadata.get('decomposition_fill', False), key='h-fill-'+uid)
         options = plot_options('hnmr-plot', {'x_label':'Chemical shift','x_unit':'ppm','y_label':'Intensity','y_unit':'a.u.','reverse_x':True,'x_min':-5,'x_max':15})
-        show_figure(spectra_figure(series,options,colors=colors),'H_NMR')
-        if result:
-            st.subheader('Quantitative results')
-            st.dataframe([{'Result':k.replace('_',' '),'Value':v} for k,v in result.values.items()], width='stretch')
-            for warning in result.warnings: st.warning(warning)
+        figure = Figure(figsize=(8.5,5.2), constrained_layout=True); axis = figure.add_subplot(111)
+        draw_hnmr(axis, s, p, options, fit, components, imag)
+        apply_origin_style(figure, axis, options); _style_legend(axis, options)
+        show_figure(figure,'H_NMR')
+        if result or fit:
+            st.subheader('Decomposition / quantitative results')
+            values = result.values if result else decomposition_values(fit)
+            st.dataframe([{'Result':k.replace('_',' '),'Value':v} for k,v in values.items()], width='stretch')
+            st.info(result.quantitative_status if result else 'Component areas / signal fractions are not surface coverage.')
+            for warning in (result.warnings if result else fit.warnings): st.warning(warning)
+            audit = result.audit if result else json.dumps(fit.audit, indent=2, ensure_ascii=False)
             with st.expander('Calculation details'):
-                st.text_area('Complete calculation record',result.audit,height=400,key='h-audit-'+uid)
-            st.download_button('Download H NMR calculation',result.audit,'H_NMR_calculation.txt','text/plain',key='h-audit-download')
-            st.download_button('Download H NMR processed CSV',result_csv(result),'H_NMR_processed.csv','text/csv',key='h-csv-download')
+                st.text_area('Complete calculation record',audit,height=400,key='h-audit-'+uid)
+            st.download_button('Download H NMR calculation',audit,'H_NMR_calculation.txt','text/plain',key='h-audit-download')
+            st.download_button('Download H NMR processed CSV',result_csv(result) if result else decomposition_csv(fit),'H_NMR_decomposition.csv','text/csv',key='h-csv-download')
+
     _render_dialog()

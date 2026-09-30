@@ -13,7 +13,7 @@ def main() -> None:
     if app.exception:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     titles = [item.value for item in app.title]
-    if titles != ["LabPlotter Web 0.10.0"]:
+    if titles != ["LabPlotter Web 0.10.1"]:
         raise RuntimeError(f"Unexpected title: {titles}")
     labels = [item.label for item in app.tabs]
     expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "C NMR", "H NMR", "ZetaSizer", "Lab DLS", "TEM", "Custom format"]

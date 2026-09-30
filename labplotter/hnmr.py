@@ -16,7 +16,9 @@ from uuid import uuid4
 import numpy as np
 from scipy.integrate import trapezoid
 from scipy.ndimage import gaussian_filter1d
-from scipy.optimize import least_squares, minimize_scalar
+from scipy.optimize import minimize_scalar
+from .hnmr_decomposition import (DecompositionSettings, DecompositionResult, decompose,
+    decomposition_values, decomposition_csv, restore_decomposition)
 
 
 @dataclass
@@ -324,10 +326,17 @@ class QuantSettings:
     reference_response_factor: float = 1.
     aliphatic_min: float = 0.
     aliphatic_max: float = 4.5
-    aromatic_min: float = 6.
+    aromatic_min: float = 5.5
     aromatic_max: float = 9.
-    core_scaling: str = "aromatic"
-    method: str = "regions"
+    core_scaling: str = "mass"
+    method: str = "decomposition"
+    fit_min: float = -20.
+    fit_max: float = 25.
+    fwhm_min: float = .15
+    fwhm_max: float = 25.
+    line_shape: str = "pseudo_voigt"
+    overlap_band: bool = False
+    sample_core_mass_mg: float | None = None
     calibration_verified: bool = False
     acquisition_verified: bool = False
     assignments_verified: bool = False
@@ -339,10 +348,13 @@ class QuantSettings:
             value = getattr(self, key)
             if value is None or not np.isfinite(value) or value <= 0:
                 raise ValueError(f"{key}: enter a finite positive value (Lys proton count is intentionally blank).")
-        if self.standard_basis not in ("ppm", "point_sum", "hz") or self.method not in ("regions", "gaussian"):
+        if self.standard_basis not in ("ppm", "point_sum", "hz") or self.method != "decomposition":
             raise ValueError("Unsupported integration or calibration method.")
-        if self.core_scaling not in ("aromatic", "mass"):
-            raise ValueError("Choose aromatic or mass core scaling.")
+        if self.core_scaling != "mass":
+            raise ValueError("Aromatic-area mass inference is retired. Use entered core / reference masses.")
+        if self.sample_core_mass_mg is not None and (not np.isfinite(self.sample_core_mass_mg) or not 0 < self.sample_core_mass_mg <= self.sample_mass_mg):
+            raise ValueError("Core mass must be positive and no greater than entered sample mass.")
+        self.decomposition_settings().validate()
         if not self.core.strip() or not self.ligand.strip():
             raise ValueError("Choose a core and a ligand (use a hypothetical ligand for a pristine-core blank check).")
         if not np.isfinite([self.aliphatic_min, self.aliphatic_max, self.aromatic_min, self.aromatic_max]).all():
@@ -351,6 +363,9 @@ class QuantSettings:
             raise ValueError("Use separate increasing aliphatic and aromatic regions, with a gap between them.")
         self.standard_ppm_area()
         return self
+
+    def decomposition_settings(self):
+        return DecompositionSettings(**{key: getattr(self, key) for key in DecompositionSettings.__dataclass_fields__})
 
     def standard_ppm_area(self):
         if self.standard_basis == "ppm":
@@ -379,30 +394,24 @@ def quant_defaults(spectrum, parameters):
                            ("frequency_mhz", "frequency_mhz"), ("calibration_verified", "verified")):
         setattr(q, target, standard[source])
     q.use_prepared = bool(spectrum.processing.get("prepared"))
+    for key, value in spectrum.metadata.get("decomposition_settings", {}).items():
+        if key in DecompositionSettings.__dataclass_fields__: setattr(q, key, value)
     return q
 
 
-def _gaussian_decomposition(x, y, q):
-    """Three positive bands; an exploratory model, not a unique peak assignment."""
-    bounds = [(q.aliphatic_min, q.aliphatic_max), (q.aliphatic_max, q.aromatic_min), (q.aromatic_min, q.aromatic_max)]
-    # Fit broad tails too. Integrate components only within the recorded range.
-    scale = max(float(np.max(np.abs(y))), 1e-30)
-    def components(p):
-        return [scale*p[i*3]*np.exp(-0.5*((x-p[i*3+1])/p[i*3+2])**2) for i in range(3)]
-    initial, low, high = [], [], []
-    for lo, hi in bounds:
-        initial.extend([0.5, (lo+hi)/2, max(0.3, (hi-lo)/2)])
-        low.extend([0., lo, 0.05]); high.extend([10., hi, max(1., (x[-1]-x[0])/2)])
-    fit = least_squares(lambda p: (sum(components(p))-y)/scale, initial, bounds=(low, high), max_nfev=1500)
-    if not fit.success:
-        raise ValueError("Gaussian decomposition did not converge. Inspect the regions or use region integrals.")
-    curves = components(fit.x)
-    denominator = np.sum((y-y.mean())**2)
-    r2 = float(1-np.sum((sum(curves)-y)**2)/denominator) if denominator else None
-    return {"aliphatic": float(trapezoid(curves[0], x)), "aromatic": float(trapezoid(curves[2], x)),
-            "curves": curves, "audit": {"fit_R2": r2, "amplitude_center_sigma": fit.x.reshape(3, 3).tolist(),
-                "amplitude_scale": scale, "center_bounds_ppm": bounds,
-                "area_domain_ppm": [float(x[0]), float(x[-1])], "nfev": fit.nfev}}
+def restored_quant_settings(spectrum, parameters):
+    """Migrate saved 0.10.0 choices without accepting old quantitation claims."""
+    q = quant_defaults(spectrum, parameters)
+    saved = spectrum.metadata.get("analysis_parameters", {})
+    for key, value in saved.items():
+        if key in QuantSettings.__dataclass_fields__: setattr(q, key, value)
+    if saved.get("method") != "decomposition":
+        q.method, q.core_scaling = "decomposition", "mass"
+        q.calibration_verified = q.acquisition_verified = q.assignments_verified = False
+        q.aromatic_min = 5.5
+    for key, value in spectrum.metadata.get("decomposition_settings", {}).items():
+        if key in DecompositionSettings.__dataclass_fields__: setattr(q, key, value)
+    return q
 
 
 @dataclass
@@ -416,6 +425,9 @@ class QuantResult:
     excess_curve: np.ndarray
     components: list[np.ndarray]
     audit: str
+    sample_fit: DecompositionResult
+    reference_fit: DecompositionResult
+    quantitative_status: str
 
 
 def quantify(sample: HNMRSpectrum, reference: HNMRSpectrum, q: QuantSettings) -> QuantResult:
@@ -427,91 +439,95 @@ def quantify(sample: HNMRSpectrum, reference: HNMRSpectrum, q: QuantSettings) ->
         a, b = preview_spectrum(sample), preview_spectrum(reference)
     else:
         settings = common_settings([sample, reference])
-        # Honor the preview's correction switches; apply exactly the same policy to both.
         switches = sample.processing.get("settings", {})
         settings.phase = switches.get("phase", True); settings.baseline = switches.get("baseline", True)
         a = process_hnmr(sample, settings, sample.metadata.get("manual_phase0"))
         b = process_hnmr(reference, settings, reference.metadata.get("manual_phase0"))
     if len(a.x) != len(b.x) or not np.allclose(a.x, b.x, rtol=0, atol=1e-9):
         raise ValueError("Sample and reference must share the same grid.")
-    ar = integrate(a.x, a.y, q.aliphatic_min, q.aliphatic_max)
-    aa = integrate(a.x, a.y, q.aromatic_min, q.aromatic_max)
-    br = integrate(b.x, b.y, q.aliphatic_min, q.aliphatic_max)
-    ba = integrate(b.x, b.y, q.aromatic_min, q.aromatic_max)
-    area_a, aromatic_a, area_b, aromatic_b = ar, aa, br, ba
-    fit_a = fit_b = None
-    components = []
-    warnings = []
-    if q.method == "gaussian":
-        fit_a, fit_b = _gaussian_decomposition(a.x, a.y, q), _gaussian_decomposition(b.x, b.y, q)
-        area_a, aromatic_a, area_b, aromatic_b = fit_a["aliphatic"], fit_a["aromatic"], fit_b["aliphatic"], fit_b["aromatic"]
-        components = fit_a["curves"]
-        warnings.append("Three-band Gaussian decomposition is a non-unique model. Inspect the fit and assignments; band areas include tails outside nominal regions.")
-        if any(f["audit"]["fit_R2"] is None or f["audit"]["fit_R2"] < .98 for f in (fit_a, fit_b)):
-            warnings.append("The Gaussian model does not closely reproduce at least one spectrum (fit R2 < 0.98). Review the decomposition before using its areas.")
-    if q.core_scaling == "aromatic":
-        if aromatic_b <= max(1e-20, abs(area_b)*1e-10) or aromatic_a <= 0:
-            raise ValueError("Positive aromatic reference and sample areas are required for core scaling.")
-        alpha = aromatic_a*q.response_factor/(aromatic_b*q.reference_response_factor)
-    else:
-        alpha = q.sample_mass_mg/q.reference_mass_mg
+    settings = q.decomposition_settings()
+    def fitted(s, processed):
+        prior = restore_decomposition(processed, s.metadata.get("decomposition"))
+        if prior and prior.audit["settings"] == asdict(settings): return prior
+        return decompose(processed, settings)
+    fit_a, fit_b = fitted(sample, a), fitted(reference, b)
+    area_a, aromatic_a = fit_a.areas["aliphatic"], fit_a.areas["aromatic"]
+    area_b, aromatic_b = fit_b.areas["aliphatic"], fit_b.areas["aromatic"]
+    # No aromatic-intensity mass estimate. Known core mass is preferred; weighed
+    # total mass is an explicit approximation, requiring assignment review.
+    core_mass = q.sample_core_mass_mg if q.sample_core_mass_mg is not None else q.sample_mass_mg
+    alpha = core_mass/q.reference_mass_mg
     excess = area_a*q.response_factor-alpha*area_b*q.reference_response_factor
     n_h = excess/q.standard_ppm_area()*q.standard_mmol_h*1000
     n_lig = n_h/q.effective_h
     loading = n_lig/q.sample_mass_mg
     coverage = 100*loading/q.capacity_umol_mg
     ligand_mass = n_lig*q.molecular_weight/1000
-    if not q.calibration_verified:
-        warnings.append("PROVISIONAL: standard area unit/processing scale has not been verified. ppm is only a provisional interpretation of the supplied area.")
-    if not q.acquisition_verified:
-        warnings.append("PROVISIONAL: confirm quantitative excitation, relaxation, scan count, receiver gain, filling and response factors against the standard and core reference.")
-    if not q.assignments_verified:
-        warnings.append("PROVISIONAL: effective H is a structural non-exchangeable-H count, not proof that the selected band captures all of those protons. Broad tails/overlap need checking.")
+    blockers = []
+    if not q.calibration_verified: blockers.append("standard area unit and absolute response scale")
+    if not q.acquisition_verified: blockers.append("quantitative acquisition / response factors")
+    if not q.assignments_verified: blockers.append("component assignment, H per ligand and core background model")
+    warnings = ["Sample: "+w for w in fit_a.warnings]+["Reference: "+w for w in fit_b.warnings]
+    if any(f.audit["fit_R2"] < .98 for f in (fit_a, fit_b)):
+        blockers.append("inadequate decomposition fit (R2 < 0.98)")
+    if q.sample_core_mass_mg is None:
+        warnings.append("Core background uses entered total sample mass as an approximation. Enter independently known core mass if available; aromatic area is not used to estimate mass.")
+    status = "Withheld: verify " + "; ".join(blockers) if blockers else "Model-based ligand-equivalent coverage"
+    if blockers: warnings.insert(0, status+". Component areas remain available; signal fraction is NOT surface coverage.")
     if coverage < 0 or coverage > 100:
-        warnings.append("Coverage is outside 0–100%; it has NOT been clipped. Check calibration, regions, reference scaling, proton count and the capacity model.")
+        warnings.append("The calibration/model algebra is outside 0–100%; it has NOT been clipped. This is not a validated surface coverage.")
+        if not blockers: status = "Outside 0–100%: calibration / core / capacity model inconsistent"
     if ligand_mass > q.sample_mass_mg:
-        warnings.append("Ligand-equivalent mass exceeds the entered mass: absolute calibration/response is inconsistent.")
-    warnings.append("Apparent ligand-equivalent coverage under the selected core/capacity model; 1H NMR alone does not establish covalent grafting or surface-only binding. Capacity denominator uses the entered mass (default: weighed sample mass).")
-    values = {"aliphatic_integral": ar, "aromatic_integral": aa, "reference_aliphatic_integral": br,
-              "reference_aromatic_integral": ba, "aliphatic_aromatic_ratio": ar/aa if aa else None,
-              "quant_aliphatic_area": area_a, "quant_aromatic_area": aromatic_a,
-              "reference_quant_aliphatic_area": area_b, "reference_quant_aromatic_area": aromatic_b,
-              "core_scale": alpha, "excess_aliphatic_area": excess,
-              "excess_H_umol": n_h, "ligand_umol": n_lig, "loading_umol_mg": loading,
-              "capacity_umol": q.capacity_umol_mg*q.sample_mass_mg,
-              "apparent_coverage_percent": coverage, "ligand_equivalent_mass_mg": ligand_mass,
-              "ligand_equivalent_mass_percent": 100*ligand_mass/q.sample_mass_mg,
-              "standard_area_intensity_ppm": q.standard_ppm_area()}
-    if fit_a:
-        values.update(sample_fit_R2=fit_a["audit"]["fit_R2"], reference_fit_R2=fit_b["audit"]["fit_R2"])
-    core_curve = alpha*b.y*q.reference_response_factor
-    excess_curve = a.y*q.response_factor-core_curve
+        warnings.append("Ligand-equivalent mass exceeds the entered sample mass: absolute calibration/response or assignment is inconsistent.")
+    warnings.append("NMR component assignments are model dependent. Aliphatic includes intrinsic core H; water/OH/NH and background can overlap. NMR alone does not establish covalent grafting or surface-only binding.")
+    values = decomposition_values(fit_a)
+    values.update(reference_aliphatic_integral=area_b, reference_aromatic_integral=aromatic_b,
+                  quant_aliphatic_area=area_a, quant_aromatic_area=aromatic_a,
+                  reference_quant_aliphatic_area=area_b, reference_quant_aromatic_area=aromatic_b,
+                  core_scale=alpha, core_mass_used_mg=core_mass, excess_aliphatic_area=excess,
+                  reference_fit_R2=fit_b.audit["fit_R2"],
+                  capacity_umol=q.capacity_umol_mg*q.sample_mass_mg,
+                  standard_area_intensity_ppm=q.standard_ppm_area())
+    absolute = {"excess_H_umol": n_h, "ligand_umol": n_lig, "loading_umol_mg": loading,
+                "apparent_coverage_percent": coverage, "ligand_equivalent_mass_mg": ligand_mass,
+                "ligand_equivalent_mass_percent": 100*ligand_mass/q.sample_mass_mg}
+    values.update({k: None if blockers else v for k, v in absolute.items()})
+    # Window integrals are diagnostic only and never drive this calculation.
+    for label, processed in (("sample", a), ("reference", b)):
+        values[label+"_window_aliphatic_area"] = integrate(processed.x, processed.y, q.aliphatic_min, q.aliphatic_max)
+        values[label+"_window_aromatic_area"] = integrate(processed.x, processed.y, q.aromatic_min, q.aromatic_max)
+    core_curve = alpha*fit_b.curves["aliphatic"]*q.reference_response_factor
+    excess_curve = fit_a.curves["aliphatic"]*q.response_factor-core_curve
     audit = {"sample": {"name": sample.name, "uid": sample.uid, "source": sample.source},
              "reference": {"name": reference.name, "uid": reference.uid, "source": reference.source},
              "parameters": asdict(q), "sample_preprocessing": a.audit, "reference_preprocessing": b.audit,
-             "sample_fit": fit_a["audit"] if fit_a else None, "reference_fit": fit_b["audit"] if fit_b else None,
-             "results": values, "warnings": warnings}
-    equations = ("All signed integrals use the trapezoidal rule on increasing ppm with interpolated exact endpoints.\n"
-                 "No maximum/area normalization; imaginary data are rotated with real data.\n"
-                 "alpha = (Arom_sample * response_sample) / (Arom_core * response_core), or mass_sample / mass_core\n"
-                 "DeltaA = Aliph_sample * response_sample - alpha * Aliph_core * response_core\n"
+             "sample_fit": fit_a.audit, "reference_fit": fit_b.audit, "results": values,
+             "quantitative_status": status, "unvalidated_algebra_only": absolute if blockers else None, "warnings": warnings}
+    equations = ("Fit processed real spectrum = aliphatic + aromatic [+ unassigned]. Residual = data - sum.\n"
+                 "Pseudo-Voigt = height * [(1-eta)*exp(-4*ln(2)*((ppm-center)/FWHM)^2) + eta/(1+4*((ppm-center)/FWHM)^2)].\n"
+                 "Component areas use analytic integrals between fit_min and fit_max, INCLUDING overlapping tails. Center bounds are not integration cutoffs.\n"
+                 "No maximum/area normalization; no aromatic-based mass inference.\n"
+                 "alpha = entered core mass / pristine-reference mass (total sample mass approximation if core mass blank)\n"
+                 "DeltaA = fitted Aliph_sample * response_sample - alpha * fitted Aliph_core * response_core\n"
                  "nH [umol] = DeltaA / standard_area[intensity*ppm] * standard_mmol_H * 1000\n"
-                 "nLigand [umol] = nH / effective_H\n"
-                 "Loading [umol/mg] = nLigand / entered_mass_mg\n"
-                 "Coverage [%] = 100 * Loading / maximum_capacity_umol_mg\n"
-                 "Ligand-equivalent mass [mg] = nLigand * parent_ligand_MW / 1000\n"
-                 "point_sum standard converts to intensity*ppm by multiplying STANDARD original ppm step; Hz area divides by MHz.\n\n")
-    return QuantResult(a, b, values, asdict(q), warnings, core_curve, excess_curve, components,
-                       equations+json.dumps(audit, indent=2, ensure_ascii=False, allow_nan=False))
+                 "nLigand [umol] = nH / H_atoms_represented_per_ligand (stoichiometry, NOT particle mass estimation)\n"
+                 "Coverage [%] = 100 * nLigand / (entered_mass_mg * maximum_capacity_umol_mg)\n"
+                 "Signal fraction [%] = 100 * A_aliphatic / (A_aliphatic + A_aromatic); NOT grafting efficiency or coverage.\n"
+                 "point_sum standard: multiply by STANDARD original ppm step; Hz area: divide by MHz.\n"
+                 "Absolute amounts are withheld until calibration, acquisition and assignments are reviewed.\n\n")
+    return QuantResult(a, b, values, asdict(q), warnings, core_curve, excess_curve,
+                       list(fit_a.curves.values()), equations+json.dumps(audit, indent=2, ensure_ascii=False, allow_nan=False),
+                       fit_a, fit_b, status)
 
 
 def result_csv(result):
     import io
+    f, r = result.sample_fit, result.reference_fit
     stream = io.StringIO()
-    arrays = [result.sample.x, result.sample.y, result.sample.imaginary, result.reference.y,
-              result.core_curve, result.excess_curve] + result.components
-    header = "ppm,sample_processed,sample_imaginary,reference_processed,scaled_core,excess_response_corrected"
-    if result.components:
-        header += ",fit_aliphatic,fit_middle,fit_aromatic"
+    arrays = [f.x, f.observed, *f.curves.values(), f.total, f.residual,
+              r.observed, r.curves["aliphatic"], r.curves["aromatic"], r.total, r.residual,
+              result.core_curve, result.excess_curve]
+    header = ("ppm,sample_processed,"+",".join("fit_"+k for k in f.curves)+
+              ",sample_total_fit,sample_residual,reference_processed,reference_fit_aliphatic,reference_fit_aromatic,reference_total_fit,reference_residual,scaled_core_aliphatic,excess_aliphatic")
     np.savetxt(stream, np.column_stack(arrays), delimiter=",", header=header, comments="", fmt="%.12g")
     return stream.getvalue()

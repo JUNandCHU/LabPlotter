@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 from labplotter.hnmr import common_settings, prepare_spectra, quantify, QuantSettings
 from labplotter.hnmr_library import HNMRLibrary,HNMRParameterLibrary
-from labplotter.hnmr_ui import HNMRTab,HPreprocessingDialog,QuantDialog,ParameterWindow,NMRWorkspace
+from labplotter.hnmr_ui import HNMRTab,HPreprocessingDialog,HDecompositionDialog,QuantDialog,ParameterWindow,NMRWorkspace
 from labplotter.nmr_ui import nmr_tree_style
 from test_hnmr import fixture
 
@@ -40,7 +40,7 @@ class HNMRDesktopTests(unittest.TestCase):
         q.calculate();self.root.update()
         self.assertIn(self.a.uid,self.tab.results)
         self.assertGreater(len(self.tab.result_tree.get_children()),10)
-        self.assertEqual(len(self.tab.plot.axis.lines),3)
+        self.assertEqual(len(self.tab.plot.axis.lines),5)
         self.tab.baseline.set(False);self.tab.correction_changed();self.root.update()
         self.assertFalse(self.tab.results);self.assertFalse(self.a.processing['prepared'])
         self.assertEqual(len(self.tab.plot.axis.lines),1);self.assertFalse(self.errors)
@@ -65,9 +65,9 @@ class HNMRDesktopTests(unittest.TestCase):
         self.tab.results[self.a.uid]=quantify(self.a,self.b,QuantSettings())
         self.tab._refresh();self.root.update();self.tab.plot.open_settings();self.root.update()
         editor=self.tab.plot.settings_window.curve_editor
-        key=self.a.uid+':excess';editor.variables[key].set('#123ABC');self.root.update()
-        self.assertEqual(self.tab.plot.axis.lines[2].get_color(),'#123ABC')
-        self.assertEqual(self.a.metadata['curve_colors']['excess'],'#123ABC')
+        key=self.a.uid+':aliphatic';editor.variables[key].set('#123ABC');self.root.update()
+        self.assertEqual(next(line for line in self.tab.plot.axis.lines if line.get_label()=='Aliphatic component').get_color(),'#123ABC')
+        self.assertEqual(self.a.metadata['curve_colors']['aliphatic'],'#123ABC')
         from labplotter.plotting import figure_png_bytes
         from PIL import Image
         from io import BytesIO
@@ -89,6 +89,32 @@ class HNMRDesktopTests(unittest.TestCase):
             self.assertLessEqual(buttons[-1].winfo_y()+buttons[-1].winfo_height(),q.winfo_height())
             q.destroy()
         finally:font.configure(size=old);nmr_tree_style(self.root)
+        self.assertFalse(self.errors)
+
+    def test_fit_preview_styles_export_and_library_roundtrip(self):
+        d=HDecompositionDialog(self.tab,self.a);self.root.update();d.preview();self.root.update()
+        self.assertIsNotNone(d.fit);self.assertNotIn('decomposition',self.a.metadata)
+        d.apply();self.root.update()
+        self.assertEqual(len(self.tab.plot.axis.lines),5)
+        self.assertTrue(self.tab.plot.export_current_view)
+        self.tab.plot.open_settings();self.root.update()
+        ext=self.tab.plot.settings_extension
+        ext.vars['aliphatic']['width'].set('4.25');ext.vars['aliphatic']['line_style'].set('-.');ext.apply()
+        self.root.update()
+        line=next(line for line in self.tab.plot.axis.lines if line.get_label()=='Aliphatic component')
+        self.assertEqual(line.get_linewidth(),4.25);self.assertEqual(line.get_linestyle(),'-.')
+        self.tab.show_components.set(False);self.tab.components_changed();self.root.update()
+        self.assertEqual(len(self.tab.plot.axis.lines),1)
+        captured=[]
+        self.tab.plot._with_annotation_visibility(True,lambda:captured.append(len(self.tab.plot.axis.lines)))
+        self.assertEqual(captured,[1])
+        self.tab.save();saved=self.tab.library.load(self.a.uid)
+        self.assertEqual(saved.metadata['decomposition_styles']['aliphatic']['width'],4.25)
+        self.assertIn('decomposition',saved.metadata)
+        self.tab.show_components.set(True);self.tab.components_changed();self.root.update()
+        captured=[]
+        self.tab.plot._with_annotation_visibility(False,lambda:captured.append([v.get_visible() for v in self.tab.plot.overlay_artists]))
+        self.assertEqual(captured,[[True]*4])
         self.assertFalse(self.errors)
 
     def test_parameters_persist_and_lys_stays_unconfigured(self):

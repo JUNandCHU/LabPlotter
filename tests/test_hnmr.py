@@ -95,7 +95,7 @@ class HNMRTests(unittest.TestCase):
         a=fixture('PDA-C6',extra=40);b=fixture('PDA')
         settings=replace(common_settings([a,b]),phase=False,baseline=False)
         prepare_spectra([a,b],settings)
-        q=QuantSettings(sample_mass_mg=10,reference_mass_mg=10,capacity_umol_mg=.2,
+        q=QuantSettings(line_shape="gaussian", calibration_verified=True, acquisition_verified=True, assignments_verified=True, sample_mass_mg=10,reference_mass_mg=10,capacity_umol_mg=.2,
                         standard_area=100,standard_mmol_h=.001,effective_h=2)
         r=quantify(a,b,q)
         expected_area=40*.35*np.sqrt(2*np.pi)
@@ -105,19 +105,19 @@ class HNMRTests(unittest.TestCase):
         self.assertEqual(quantify(b,b,q).values['apparent_coverage_percent'],0.)
         clone=fixture('different name',scale=2)
         prepare_spectra([b,clone],settings)
-        self.assertAlmostEqual(quantify(clone,b,q).values['apparent_coverage_percent'],0.,places=12)
+        self.assertAlmostEqual(quantify(clone,b,replace(q,sample_mass_mg=20)).values['apparent_coverage_percent'],0.,places=12)
 
     def test_stale_or_separately_prepared_data_block_saved_group_analysis(self):
         a,b=fixture('PDA-C6'),fixture()
         prepare_spectra([a],common_settings([a]));prepare_spectra([b],common_settings([b]))
         with self.assertRaisesRegex(ValueError,'together'):quantify(a,b,QuantSettings())
-        r=quantify(a,b,QuantSettings(use_prepared=False))
+        r=quantify(a,b,QuantSettings(use_prepared=False,calibration_verified=True,acquisition_verified=True,assignments_verified=True))
         self.assertAlmostEqual(r.values['apparent_coverage_percent'],0.)
 
     def test_standard_units_do_not_depend_on_sample_resampling_grid(self):
         a,b=fixture('PDA-C6',extra=40),fixture()
         prepare_spectra([a,b],replace(common_settings([a,b]),phase=False))
-        base=QuantSettings(standard_area=100)
+        base=QuantSettings(standard_area=100,calibration_verified=True,acquisition_verified=True,assignments_verified=True)
         values=[]
         for q in (base,replace(base,standard_basis='point_sum',standard_area=10000,standard_grid_step=.01),
                   replace(base,standard_basis='hz',standard_area=40000,frequency_mhz=400)):
@@ -128,20 +128,20 @@ class HNMRTests(unittest.TestCase):
     def test_mass_scaling_response_multiplier_and_unclipped_negative(self):
         a,b=fixture('PDA-C6',extra=-6),fixture()
         prepare_spectra([a,b],replace(common_settings([a,b]),phase=False))
-        q=QuantSettings(core_scaling='mass',sample_mass_mg=10,reference_mass_mg=10)
+        q=QuantSettings(core_scaling='mass',sample_mass_mg=10,reference_mass_mg=10,calibration_verified=True,acquisition_verified=True,assignments_verified=True)
         r=quantify(a,b,q);self.assertLess(r.values['apparent_coverage_percent'],0)
         self.assertTrue(any('NOT been clipped' in w for w in r.warnings))
         r2=quantify(a,b,replace(q,response_factor=2,reference_response_factor=2))
         self.assertAlmostEqual(r2.values['ligand_umol'],2*r.values['ligand_umol'])
         self.assertIn('standard_mmol_H * 1000',r.audit)
-        self.assertEqual(len(result_csv(r).splitlines()),len(r.sample.x)+1)
+        self.assertEqual(len(result_csv(r).splitlines()),len(r.sample_fit.x)+1)
 
     def test_gaussian_decomposition_has_recoverable_components_and_zero_blank(self):
         s=fixture();prepare_spectra([s],replace(common_settings([s]),phase=False))
-        r=quantify(s,s,QuantSettings(method='gaussian'))
+        r=quantify(s,s,QuantSettings(line_shape='gaussian',calibration_verified=True,acquisition_verified=True,assignments_verified=True))
         self.assertEqual(r.values['apparent_coverage_percent'],0)
-        self.assertEqual(len(r.components),3)
-        np.testing.assert_allclose(sum(r.components),r.sample.y,atol=.002)
+        self.assertEqual(len(r.components),2)
+        np.testing.assert_allclose(sum(r.components),r.sample_fit.observed,atol=.002)
 
     def test_defaults_identity_missing_lys_and_invalid_inputs(self):
         p=default_parameters();self.assertEqual(len(p['samples']),10)

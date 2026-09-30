@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.1 — 2026-09-29
+
+- Correct H NMR quantitation to decompose before integrating; retire direct-window/aromatic-mass-scaling as quantitative methods. Fit constrained Gaussian, Lorentzian or pseudo-Voigt aliphatic/aromatic envelopes, with an optional unassigned overlap band.
+- Add fit preview, component/sum/residual overlays, analytic finite-domain component integrals, fit diagnostics and raw-window diagnostic areas. Persist fit settings, records and styles with fingerprint-based invalidation.
+- Add individual decomposition line width/style/visibility, area shading and shared curve colors; clipboard and PNG/SVG/PDF retain the currently visible layers.
+- Withhold absolute ligand amounts/coverage until standard units/response, quantitative acquisition and assignments are reviewed. Separate proton-signal fractions from coverage; retain unclipped model algebra in the audit. Use entered mass ratios for pristine-core background, with optional independently known core mass.
+- Migrate old analysis settings safely, retain C NMR/DLS behavior, and update desktop/browser workflows and scientific/UI regression coverage.
+
 ## 0.10.0 — 2026-09-29
 
 - Preserve C NMR under an ssNMR subtab and add complex H NMR import with immutable real/imaginary inputs, automatic zero-order phase, optional manual phase, baseline switches and common non-normalizing preprocessing.

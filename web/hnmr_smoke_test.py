@@ -23,16 +23,21 @@ def main():
     next(b for b in app.button if b.label=='Apply common H NMR preprocessing').click().run()
     if app.exception:raise RuntimeError(str(app.exception))
     assert sample.processing['prepared'] and reference.processing['prepared']
+    app.button(key='h-decomposition').click().run()
+    next(b for b in app.button if b.label=='Fit and overlay H NMR').click().run()
+    if app.exception:raise RuntimeError(str(app.exception))
+    assert 'decomposition' in sample.metadata
     app.button(key='h-quantitative').click().run()
     assert not app.session_state['_hnmr_results']
     app.text_input(key='h-q-'+sample.uid+'-standard_area').set_value('100')
     app.text_input(key='h-q-'+sample.uid+'-standard_mmol_h').set_value('.001')
+    for key in ('calibration_verified','acquisition_verified','assignments_verified'):app.checkbox(key='h-q-'+sample.uid+'-'+key).check()
     next(b for b in app.button if b.label=='Confirm parameters and calculate H NMR').click().run()
     if app.exception:raise RuntimeError(str(app.exception))
     result=app.session_state['_hnmr_results'][sample.uid]
     assert 0<result.values['apparent_coverage_percent']<100
     assert len(app.dataframe)>=1
-    app.color_picker(key='hnmr-color-'+sample.uid+':excess').set_value('#12AB34').run()
+    app.color_picker(key='hnmr-color-'+sample.uid+':aliphatic').set_value('#12AB34').run()
     app.button(key='h-save').click().run()
     assert len(app.session_state['_hnmr_library'])==1
     app.checkbox(key='h-phase-'+sample.uid).uncheck().run()
