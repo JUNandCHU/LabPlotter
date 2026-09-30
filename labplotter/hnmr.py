@@ -18,7 +18,8 @@ from scipy.integrate import trapezoid
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import minimize_scalar
 from .hnmr_decomposition import (DecompositionSettings, DecompositionResult, decompose,
-    decomposition_values, decomposition_csv, restore_decomposition)
+    decomposition_values, decomposition_csv, restore_decomposition, decomposition_defaults)
+from .hnmr_quality import estimate_spacing, masked_baseline, phase_zero_first, sideband_diagnostics
 
 
 @dataclass
@@ -111,6 +112,12 @@ class HNMRSettings:
     max_shift: float = 0.3
     alignment_min: float = 6.0
     alignment_max: float = 9.0
+    auto_phase1: bool = False
+    masked_baseline: bool = False
+    baseline_degree: int = 2
+    baseline_exclusion: float = 20.
+    baseline_anchor_min: float = 0.
+    sideband_spacing: float = 55.
 
     def validate(self):
         numbers = [v for v in asdict(self).values() if not isinstance(v, bool)]
@@ -125,6 +132,12 @@ class HNMRSettings:
             raise ValueError("Baseline edge fraction: 0.01–0.25; broadening and shift limit: nonnegative.")
         if self.alignment_min >= self.alignment_max:
             raise ValueError("Alignment bounds must increase.")
+        if self.baseline_degree != int(self.baseline_degree) or not 0 <= self.baseline_degree <= 2:
+            raise ValueError("Baseline degree must be 0, 1 or 2.")
+        self.baseline_degree = int(self.baseline_degree)
+        if not 10 <= self.sideband_spacing <= 200 or not 3 <= self.baseline_exclusion < self.sideband_spacing/2:
+            raise ValueError("Baseline exclusion half-width must be at least 3 ppm and less than half the sideband spacing (10–200 ppm).")
+        if self.baseline_anchor_min < 0: raise ValueError('Baseline anchor distance must be nonnegative.')
         return self
 
 
@@ -134,9 +147,13 @@ def common_settings(spectra: list[HNMRSpectrum]) -> HNMRSettings:
     low = max(float(s.x[0]) for s in spectra)
     high = min(float(s.x[-1]) for s in spectra)
     # Wide signal-free candidate edges for these broad solid-state 1H exports.
-    low, high = max(low, -40.), min(high, 50.)
+    wide = low <= -150 and high >= 160
+    low, high = max(low, -200. if wide else -40.), min(high, 210. if wide else 50.)
     step = max(float(np.median(np.diff(s.x))) for s in spectra)
-    return HNMRSettings(ppm_min=low, ppm_max=high, grid_step=step).validate()
+    spacing = float(np.median([estimate_spacing(s.x,s.real+1j*s.imag)[0] for s in spectra])) if wide else 55.
+    return HNMRSettings(ppm_min=low, ppm_max=high, grid_step=step, auto_phase1=wide,
+                        masked_baseline=wide, baseline_degree=1 if wide else 2,
+                        baseline_anchor_min=min(145.,(high-low)*.40) if wide else 0., sideband_spacing=spacing).validate()
 
 
 def _baseline(x, y, fraction):
@@ -197,7 +214,7 @@ class ProcessedH:
 
 
 def process_hnmr(spectrum: HNMRSpectrum, settings: HNMRSettings,
-                 phase0: float | None = None, shift: float = 0.) -> ProcessedH:
+                 phase0: float | None = None, shift: float = 0., phase1: float | None = None) -> ProcessedH:
     settings.validate()
     if not np.isfinite(shift):
         raise ValueError("Chemical-shift correction must be finite.")
@@ -207,22 +224,48 @@ def process_hnmr(spectrum: HNMRSpectrum, settings: HNMRSettings,
     count = int(np.ceil((hi-lo)/settings.grid_step))+1
     x = np.linspace(lo, hi, count)
     z = np.interp(x-shift, spectrum.x, spectrum.real) + 1j*np.interp(x-shift, spectrum.x, spectrum.imag)
-    p0 = 0.
+    p0 = p1 = 0.
+    phase_audit = {'method':'disabled','warnings':[]}
     if settings.phase:
         p0 = automatic_phase(x, z, settings.edge_fraction) if phase0 is None else float(phase0)
-        phase = p0 + settings.phase0_offset + settings.phase1_deg*(x-(lo+hi)/2)/(hi-lo)
+        if phase0 is None and settings.auto_phase1:
+            p0, p1, phase_audit = phase_zero_first(x, z, p0, settings.sideband_spacing,
+                                                  settings.baseline_exclusion, settings.baseline_degree, settings.baseline_anchor_min)
+        else:
+            p1 = float(phase1 or 0.)
+            phase_audit = deepcopy(spectrum.processing.get('audit',{}).get('phase_diagnostics',
+                                   {'method':'zero-order / saved correction','warnings':[]}))
+        if 'manual_phase0' in spectrum.metadata or 'manual_phase1' in spectrum.metadata:
+            anchor=spectrum.metadata.get('manual_phase_reference',{'pivot':(lo+hi)/2,'span':hi-lo})
+            old_span=float(anchor['span']);old_pivot=float(anchor['pivot'])
+            if not np.isfinite([old_span,old_pivot]).all() or old_span<=0: raise ValueError('Invalid manual phase reference.')
+            slope=float(spectrum.metadata.get('manual_phase1', 0.))/old_span
+            p0=float(spectrum.metadata.get('manual_phase0',p0))+slope*((lo+hi)/2-old_pivot)
+            p1=slope*(hi-lo)
+            phase_audit = {'method':'manual PH0/PH1 override','warnings':[]}
+        if not np.isfinite([p0,p1]).all(): raise ValueError('Phase angles must be finite.')
+        phase = p0 + settings.phase0_offset + (p1+settings.phase1_deg)*(x-(lo+hi)/2)/(hi-lo)
         z = z*np.exp(1j*np.deg2rad(phase))
-    baseline, coeff = _baseline(x, z.real, settings.edge_fraction) if settings.baseline else (np.zeros_like(x), [0., 0.])
+    if settings.baseline and settings.masked_baseline:
+        baseline, baseline_audit = masked_baseline(x, z.real, settings.sideband_spacing,
+                                                   settings.baseline_exclusion, settings.baseline_degree, settings.baseline_anchor_min)
+        coeff = None
+    else:
+        baseline, coeff = _baseline(x, z.real, settings.edge_fraction) if settings.baseline else (np.zeros_like(x), [0.,0.])
+        baseline_audit = {'mode':'linear edges' if settings.baseline else 'disabled', 'slope_intercept':coeff}
     y = z.real-baseline
     if settings.gaussian_fwhm:
         sigma = settings.gaussian_fwhm/(2*np.sqrt(2*np.log(2))*(x[1]-x[0]))
         y = gaussian_filter1d(y, sigma, mode="reflect")
-    audit = {"settings": asdict(settings), "auto_phase0_deg": p0, "shift_added_ppm": shift,
-             "phase_source": "manual override" if "manual_phase0" in spectrum.metadata else "automatic zero-order",
+    audit = {"settings": asdict(settings), "auto_phase0_deg": p0, "auto_phase1_deg": p1, "shift_added_ppm": shift,
+             "phase_source": phase_audit['method'], "phase_diagnostics":phase_audit,
              "phase_pivot_ppm": (lo+hi)/2, "baseline_slope_intercept": coeff,
+             "baseline_diagnostics":baseline_audit,
              "actual_grid_step_ppm": float(x[1]-x[0]), "points": count,
              "normalization": "None (quantitative intensity preserved)",
              "source_sha256": hashlib.sha256(np.column_stack((spectrum.x, spectrum.real, spectrum.imag)).tobytes()).hexdigest()}
+    if hi-lo >= 200:
+        audit['sideband_diagnostics'] = sideband_diagnostics(x,y,settings.sideband_spacing,anchor_min=settings.baseline_anchor_min)
     return ProcessedH(x, y, z.imag, baseline, audit)
 
 
@@ -249,12 +292,13 @@ def prepare_spectra(spectra: list[HNMRSpectrum], settings: HNMRSettings, prepare
             if settings.max_shift > 0:
                 search = np.linspace(-settings.max_shift, settings.max_shift, 61)
                 shift = float(search[np.argmin([score(v) for v in search])])
-                results[i] = process_hnmr(spectrum, settings, result.audit["auto_phase0_deg"], shift)
+                results[i] = process_hnmr(spectrum, settings, result.audit["auto_phase0_deg"], shift, result.audit['auto_phase1_deg'])
     group = uuid4().hex
     for spectrum, result in zip(spectra, results):
         spectrum.processing = {"prepared": bool(prepared), "group_id": group if prepared else "",
                                "settings": asdict(settings),
                                "phase0": result.audit["auto_phase0_deg"] if settings.phase else spectrum.metadata.get("manual_phase0"),
+                               "phase1": result.audit['auto_phase1_deg'] if settings.phase else spectrum.metadata.get('manual_phase1'),
                                "shift": result.audit["shift_added_ppm"], "audit": result.audit}
     return results
 
@@ -263,10 +307,11 @@ def preview_spectrum(spectrum):
     if not spectrum.processing:
         prepare_spectra([spectrum], common_settings([spectrum]), prepared=False)
     p = spectrum.processing
-    result = process_hnmr(spectrum, HNMRSettings(**p["settings"]), p.get("phase0"), p.get("shift", 0.))
+    result = process_hnmr(spectrum, HNMRSettings(**p["settings"]), p.get("phase0"), p.get("shift", 0.), p.get('phase1'))
     # Keep the last enabled phase angle when temporarily hiding correction.
     if p["settings"]["phase"]:
         p["phase0"] = result.audit["auto_phase0_deg"]
+        p['phase1'] = result.audit['auto_phase1_deg']
     p["audit"] = result.audit
     return result
 
@@ -290,7 +335,7 @@ def default_parameters():
     return {"format": "LabPlotter H NMR parameters", "version": 1,
             "standards": [{"name": "Supplied internal standard", "area": 42565812.55, "mmol_h": 1.861273386,
                            "basis": "ppm", "grid_step": None, "frequency_mhz": None,
-                           "verified": False}],
+                           "verified": False, "includes_sidebands": True}],
             "cores": [{"name": "PDA", "capacity": 0.0693}, {"name": "ANP", "capacity": 0.1619}],
             "ligands": [{"name": "C6", "mw": 101.19, "effective_h": 13.},
                         {"name": "C18", "mw": 269.51, "effective_h": 37.},
@@ -336,6 +381,16 @@ class QuantSettings:
     fwhm_max: float = 25.
     line_shape: str = "pseudo_voigt"
     overlap_band: bool = False
+    sidebands: bool = False
+    sideband_order: int = 2
+    sideband_spacing: float = 55.
+    refine_spacing: bool = True
+    mas_hz: float = 0.
+    proton_mhz: float = 0.
+    sideband_width_scale: float = 1.
+    fit_sideband_width: bool = True
+    standard_includes_sidebands: bool = False
+    sideband_scope_verified: bool = False
     sample_core_mass_mg: float | None = None
     calibration_verified: bool = False
     acquisition_verified: bool = False
@@ -394,7 +449,8 @@ def quant_defaults(spectrum, parameters):
                            ("frequency_mhz", "frequency_mhz"), ("calibration_verified", "verified")):
         setattr(q, target, standard[source])
     q.use_prepared = bool(spectrum.processing.get("prepared"))
-    for key, value in spectrum.metadata.get("decomposition_settings", {}).items():
+    q.standard_includes_sidebands = bool(standard.get('includes_sidebands', False))
+    for key, value in asdict(decomposition_defaults(spectrum)).items():
         if key in DecompositionSettings.__dataclass_fields__: setattr(q, key, value)
     return q
 
@@ -409,8 +465,12 @@ def restored_quant_settings(spectrum, parameters):
         q.method, q.core_scaling = "decomposition", "mass"
         q.calibration_verified = q.acquisition_verified = q.assignments_verified = False
         q.aromatic_min = 5.5
+    if saved and 'standard_includes_sidebands' not in saved:
+        q.sideband_scope_verified = False
     for key, value in spectrum.metadata.get("decomposition_settings", {}).items():
         if key in DecompositionSettings.__dataclass_fields__: setattr(q, key, value)
+    if saved and not spectrum.metadata.get('analysis_audit'):
+        q.assignments_verified = q.sideband_scope_verified = False
     return q
 
 
@@ -467,7 +527,23 @@ def quantify(sample: HNMRSpectrum, reference: HNMRSpectrum, q: QuantSettings) ->
     if not q.calibration_verified: blockers.append("standard area unit and absolute response scale")
     if not q.acquisition_verified: blockers.append("quantitative acquisition / response factors")
     if not q.assignments_verified: blockers.append("component assignment, H per ligand and core background model")
+    if q.standard_includes_sidebands != q.sidebands:
+        blockers.append('sample / standard sideband integration scopes do not match')
+    if q.sidebands and not q.sideband_scope_verified:
+        blockers.append('sideband coverage, weak peaks and phase/baseline review')
     warnings = ["Sample: "+w for w in fit_a.warnings]+["Reference: "+w for w in fit_b.warnings]
+    for label, processed in (('Sample',a),('Reference',b)):
+        warnings += [label+': '+w for w in processed.audit.get('phase_diagnostics',{}).get('warnings',[])]
+    if q.sidebands:
+        for label, fit in (('sample',fit_a),('reference',fit_b)):
+            diag=fit.audit['sideband_diagnostics']
+            detected={row['order'] for row in diag['envelopes'] if row['status']=='detected'}
+            if any(not row['included'] and row['status']=='detected' for row in diag['envelopes']):
+                blockers.append(label+' has detected signal outside the included sideband orders')
+            if any(row['included'] and row['status']=='detected' and (row['negative_fraction'] or 0)>.15 for row in diag['envelopes']):
+                blockers.append(label+' has substantial negative sideband signal: review phase/baseline')
+            if any(row['order'] in detected and row['RMSE_over_local_peak']>.25 for row in fit.audit['local_fit_errors'] if row['order']):
+                blockers.append(label+' sideband fit has substantial local residuals')
     if any(f.audit["fit_R2"] < .98 for f in (fit_a, fit_b)):
         blockers.append("inadequate decomposition fit (R2 < 0.98)")
     if q.sample_core_mass_mg is None:
@@ -504,6 +580,8 @@ def quantify(sample: HNMRSpectrum, reference: HNMRSpectrum, q: QuantSettings) ->
              "sample_fit": fit_a.audit, "reference_fit": fit_b.audit, "results": values,
              "quantitative_status": status, "unvalidated_algebra_only": absolute if blockers else None, "warnings": warnings}
     equations = ("Fit processed real spectrum = aliphatic + aromatic [+ unassigned]. Residual = data - sum.\n"
+                 "MAS model: each family = sum of order 0 and independent +/- sidebands; center_n = center_0 + n * spacing. spacing[ppm] = MAS[Hz] / 1H[MHz] when provided.\n"
+                 "Family integral = sum of measured finite-domain integrals of every included order, not central area times number of peaks. No +/- height symmetry is imposed.\n"
                  "Pseudo-Voigt = height * [(1-eta)*exp(-4*ln(2)*((ppm-center)/FWHM)^2) + eta/(1+4*((ppm-center)/FWHM)^2)].\n"
                  "Component areas use analytic integrals between fit_min and fit_max, INCLUDING overlapping tails. Center bounds are not integration cutoffs.\n"
                  "No maximum/area normalization; no aromatic-based mass inference.\n"

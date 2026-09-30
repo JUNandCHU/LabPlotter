@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.2 — 2026-09-30
+
+- Add empirical MAS sideband families to H NMR decomposition: linked spacing/shape, independent +/- amplitudes, optional common satellite-width multiplier, central/sideband/total integrals and per-order CSV/audit records. No peak-count area multiplier or mirrored weak peaks.
+- Add data-aware wide preprocessing, bounded automatic PH0/PH1, outer peak-excluded baseline anchors, persistent manual phase pivot/span, and a correction/sideband QC view. Inspect per-order residuals and detection significance in addition to global R2.
+- Record the supplied standard as including all sidebands without changing its area or mmol H. Withhold coverage for mismatched scopes, unreviewed satellite coverage or substantial local residuals; preserve calibration/acquisition/assignment gates.
+- Retain family overlays, per-curve colors/styles, exact-view copy/export, libraries and common graph features. Preserve old settings with an explicit full-range migration path. Add scientific, persistence, real-Tk and browser regression coverage.
+- Package a direct 0.10.0 to 0.10.2 update including 0.10.1. The linked-envelope model is inspired by DMfit ssb; it is not DMfit or a CSA/dipolar simulation.
+
 ## 0.10.1 — 2026-09-29
 
 - Correct H NMR quantitation to decompose before integrating; retire direct-window/aromatic-mass-scaling as quantitative methods. Fit constrained Gaussian, Lorentzian or pseudo-Voigt aliphatic/aromatic envelopes, with an optional unassigned overlap band.

@@ -53,7 +53,8 @@ PARAMETER_FIELDS = {
                   ("mmol_h", "mmol H", "positive"), ("basis", "Area basis: ppm / point_sum / hz", "basis"),
                   ("grid_step", "Standard original grid step (ppm)", "optional"),
                   ("frequency_mhz", "Spectrometer frequency (MHz)", "optional"),
-                  ("verified", "Area basis and scale verified", "bool")],
+                  ("verified", "Area basis and scale verified", "bool"),
+                  ("includes_sidebands", "Area includes spinning sidebands", "bool")],
     "cores": [("name", "Core name", "text"), ("capacity", "Maximum loading (umol/mg)", "positive")],
     "ligands": [("name", "Ligand name", "text"), ("mw", "Parent molecular weight (g/mol)", "positive"),
                 ("effective_h", "H atoms represented per ligand (blank allowed)", "optional")],
@@ -64,6 +65,7 @@ PARAMETER_FIELDS = {
 def validate_parameters(document):
     if not isinstance(document, dict) or document.get("format") != "LabPlotter H NMR parameters" or document.get("version") != 1:
         raise ValueError("Not a supported H NMR parameter library.")
+    document = deepcopy(document)
     for section, fields in PARAMETER_FIELDS.items():
         rows = document.get(section)
         if not isinstance(rows, list) or not rows or len(rows) > 1000:
@@ -72,6 +74,10 @@ def validate_parameters(document):
         for row in rows:
             if not isinstance(row, dict):
                 raise ValueError("Invalid parameter entry.")
+            if section == 'standards' and 'includes_sidebands' not in row:
+                # Only the exact supplied standard has this user-confirmed scope.
+                row['includes_sidebands'] = (row.get('name') == 'Supplied internal standard' and
+                    row.get('area') == 42565812.55 and row.get('mmol_h') == 1.861273386)
             for key, label, kind in fields:
                 v = row.get(key)
                 if kind == "text" and (not isinstance(v, str) or not v.strip()):
@@ -130,7 +136,7 @@ def import_hnmr_library(text):
         p = row.get("processing", {})
         if p:
             HNMRSettings(**p["settings"]).validate()
-            if not np.isfinite([p.get("phase0") or 0, p.get("shift", 0)]).all():
+            if not np.isfinite([p.get("phase0") or 0, p.get('phase1') or 0, p.get("shift", 0)]).all():
                 raise ValueError("Invalid saved phase/shift.")
         s = HNMRSpectrum(row["name"], row["ppm"], row["real"], row["imag"], str(row.get("source", "")),
                          row.get("metadata", {}), p, uid).validate()

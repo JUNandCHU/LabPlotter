@@ -9,7 +9,7 @@ import numpy as np
 import streamlit as st
 from labplotter.hnmr import (HNMRSettings, QuantSettings, common_settings, default_parameters,
     infer_identity, parse_hnmr_text, prepare_spectra, preview_spectrum, quant_defaults, quantify, result_csv, restored_quant_settings)
-from labplotter.hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv)
+from labplotter.hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv, decomposition_defaults)
 from labplotter.hnmr_plot import ROLES, draw_hnmr
 from matplotlib.figure import Figure
 from labplotter.plotting import apply_origin_style
@@ -123,6 +123,9 @@ def preprocessing_dialog():
                   'phase0_offset':'Additional phase (degrees)', 'phase1_deg':'First-order phase (degrees)',
                   'gaussian_fwhm':'Gaussian FWHM (ppm)', 'align':'Align to first activated spectrum', 'max_shift':'Maximum shift (ppm)',
                   'alignment_min':'Alignment minimum (ppm)', 'alignment_max':'Alignment maximum (ppm)'}
+        labels.update(auto_phase1='Bounded automatic PH0 / PH1', masked_baseline='Exclude peaks from baseline',
+                      baseline_degree='Masked baseline degree (0 / 1 / 2)', baseline_exclusion='Peak exclusion half-width (ppm)',
+                      sideband_spacing='Approximate sideband spacing (ppm)', baseline_anchor_min='Baseline anchors: minimum distance from 4.5 ppm')
         cols = st.columns(2)
         for i, (key, value) in enumerate(defaults.items()):
             if isinstance(value, bool): values[key] = cols[i%2].checkbox(labels[key], value, key='h-pre-'+key)
@@ -153,7 +156,7 @@ def quant_dialog(s):
         masses = {r['name']:r['mass_mg'] for r in params['samples']}
         defaults['reference_mass_mg'] = masses.get(core)
         row = next(r for r in params['standards'] if r['name'] == standard)
-        for k, v in (('standard_area','area'),('standard_mmol_h','mmol_h'),('standard_basis','basis'),('standard_grid_step','grid_step'),('frequency_mhz','frequency_mhz'),('calibration_verified','verified')): defaults[k] = row[v]
+        for k, v in (('standard_area','area'),('standard_mmol_h','mmol_h'),('standard_basis','basis'),('standard_grid_step','grid_step'),('frequency_mhz','frequency_mhz'),('calibration_verified','verified'),('standard_includes_sidebands','includes_sidebands')): defaults[k] = row[v]
         st.session_state['_h_quant_override'] = (s.uid, defaults)
         for key in defaults: st.session_state.pop('h-q-'+s.uid+'-'+key, None)
         st.rerun(scope='fragment')
@@ -190,7 +193,11 @@ def quant_dialog(s):
 
 @st.dialog('H NMR decomposition', width='large', on_dismiss=_close_dialog)
 def decomposition_dialog(s):
-    settings = DecompositionSettings(**s.metadata.get('decomposition_settings', {}))
+    settings = decomposition_defaults(s)
+    st.caption('MAS sidebands: centers follow delta + order × spacing; +/- heights are independent. With MAS rate and 1H MHz both 0, spacing is only an estimate. Weak outer peaks require review. The optional fitted width multiplier relaxes the DMfit equal-width link.')
+    if st.button('Restore data-aware MAS defaults', key='h-fit-defaults'):
+        settings=decomposition_defaults(s,use_saved=False)
+        for key,value in asdict(settings).items(): st.session_state['h-fit-'+key]=value if isinstance(value,(bool,str)) else float(value)
     st.write('Fit the processed spectrum with aliphatic and aromatic envelopes. The center bounds guide assignments; areas include overlapping tails over the entire fit range. An optional overlap band remains unassigned.')
     with st.form('h-decomposition-form'):
         values = {}; cols = st.columns(2)
@@ -258,19 +265,37 @@ def render_hnmr_page(t, show_figure, plot_options):
         if (phase, baseline) != (s.processing['settings']['phase'], s.processing['settings']['baseline']):
             s.processing['settings'].update(phase=phase, baseline=baseline)
             s.processing.update(prepared=False, group_id=''); _invalidate(); preview = preview_spectrum(s)
-        with st.expander('Manual zero-order phase'):
+        with st.expander('Manual PH0 / PH1'):
             value = st.text_input('Degrees (blank = automatic)', '' if 'manual_phase0' not in s.metadata else str(s.metadata['manual_phase0']), key='h-manual-'+uid)
+            first = st.text_input('PH1 degrees across processing span (both blank = automatic)', '' if 'manual_phase1' not in s.metadata else str(s.metadata['manual_phase1']), key='h-manual-first-'+uid)
             if st.button('Apply phase override', key='h-manual-apply'):
                 try:
                     angle = float(value) if value.strip() else None
-                    if angle is not None and not np.isfinite(angle): raise ValueError('Enter a finite phase.')
-                    if angle is None: s.metadata.pop('manual_phase0', None)
-                    else: s.metadata['manual_phase0'] = angle
-                    s.processing.update(phase0=angle, prepared=False, group_id=''); _invalidate(); st.rerun()
+                    angle1 = float(first) if first.strip() else None
+                    if (angle is None)!=(angle1 is None): raise ValueError('Enter both angles, or leave both blank.')
+                    if angle is not None and not np.isfinite([angle,angle1]).all(): raise ValueError('Enter finite phases.')
+                    if angle is None:
+                        s.metadata.pop('manual_phase0', None);s.metadata.pop('manual_phase1',None);s.metadata.pop('manual_phase_reference',None)
+                    else:
+                        s.metadata.update(manual_phase0=angle,manual_phase1=angle1,
+                            manual_phase_reference={'pivot':preview.audit['phase_pivot_ppm'],'span':preview.x[-1]-preview.x[0]})
+                    s.processing.update(phase0=angle,phase1=angle1,prepared=False,group_id=''); _invalidate(); st.rerun()
                 except ValueError as exc: st.error(str(exc))
         result = st.session_state['_hnmr_results'].get(uid)
         p = result.sample if result else preview
         fit = result.sample_fit if result else restore_decomposition(p, s.metadata.get('decomposition'))
+        with st.expander('Phase / baseline / sideband QC'):
+            diag=fit.audit.get('sideband_diagnostics',{}) if fit else p.audit.get('sideband_diagnostics',{})
+            st.write(f"PH0 = {p.audit['auto_phase0_deg']:.4g} deg; PH1 = {p.audit.get('auto_phase1_deg',0):.4g} deg across {p.x[-1]-p.x[0]:g} ppm. Pivot: {p.audit['phase_pivot_ppm']:g} ppm.")
+            st.caption('Equal +/- heights are not required. Peak count uses prominence above a baseline/noise floor; a weak fitted peak is not an independent detection.')
+            if diag: st.dataframe(diag['envelopes'],width='stretch')
+            qfig=Figure(figsize=(9,4),constrained_layout=True);ax=qfig.add_subplot(111)
+            ax.plot(p.x,np.interp(p.x-p.audit['shift_added_ppm'],s.x,s.real),color='#a49f9f',label='Raw real')
+            ax.plot(p.x,p.y+p.baseline,color='#002060',label='Phased before baseline')
+            ax.plot(p.x,p.y,color='#000000',label='Corrected');ax.plot(p.x,p.baseline,color='#c00000',ls='--',label='Subtracted baseline')
+            ax.invert_xaxis();ax.set_xlabel('Chemical shift (ppm)');ax.legend();st.pyplot(qfig)
+            for warning in p.audit.get('phase_diagnostics',{}).get('warnings',[])+diag.get('warnings',[]):st.warning(warning)
+            st.download_button('Download H NMR QC',json.dumps({'preprocessing':p.audit,'fit':fit.audit if fit else None},indent=2),'H_NMR_QC.json','application/json',key='h-qc-download')
         active = ['real']+(['imag'] if imag else [])
         if fit and components: active += [*fit.curves, 'total', 'residual']
         labels = {key: label for key, label, _, _ in ROLES}
@@ -288,7 +313,8 @@ def render_hnmr_page(t, show_figure, plot_options):
                 style = cols[2].selectbox('Style: '+label, choices, index=choices.index(old.get('line_style', default)), key='h-style-line-'+uid+key)
                 styles[key] = {'visible':visible,'width':width or None,'line_style':style}
             s.metadata['decomposition_fill'] = st.checkbox('Shade fitted component areas', s.metadata.get('decomposition_fill', False), key='h-fill-'+uid)
-        options = plot_options('hnmr-plot', {'x_label':'Chemical shift','x_unit':'ppm','y_label':'Intensity','y_unit':'a.u.','reverse_x':True,'x_min':-5,'x_max':15})
+        wide=p.x[0]<=-145 and p.x[-1]>=155
+        options = plot_options('hnmr-plot', {'x_label':'Chemical shift','x_unit':'ppm','y_label':'Intensity','y_unit':'a.u.','reverse_x':True,'x_min':-145 if wide else -5,'x_max':155 if wide else 15})
         figure = Figure(figsize=(8.5,5.2), constrained_layout=True); axis = figure.add_subplot(111)
         draw_hnmr(axis, s, p, options, fit, components, imag)
         apply_origin_style(figure, axis, options); _style_legend(axis, options)

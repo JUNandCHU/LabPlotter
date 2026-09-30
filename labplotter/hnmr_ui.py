@@ -13,7 +13,7 @@ from .i18n import tr, localize_widget_tree
 from .hnmr import (HNMRSettings, QuantSettings, common_settings, infer_identity,
                    parse_hnmr_ascii, prepare_spectra, preview_spectrum, quant_defaults,
                    quantify, result_csv, restored_quant_settings)
-from .hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv)
+from .hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv, decomposition_defaults)
 from .hnmr_plot import ROLES, draw_hnmr
 from .hnmr_library import (HNMRLibrary, HNMRParameterLibrary, PARAMETER_FIELDS,
                            export_hnmr_library, import_hnmr_library, validate_parameters)
@@ -198,8 +198,14 @@ class ParameterWindow(tk.Toplevel):
 
 PREPROCESS_FIELDS = [
     ("ppm_min", "Common ppm minimum", "number"), ("ppm_max", "Common ppm maximum", "number"),
-    ("grid_step", "Grid step (ppm)", "number"), ("phase", "Automatic zero-order phase correction", "bool"),
-    ("baseline", "Robust linear edge baseline correction", "bool"),
+    ("grid_step", "Grid step (ppm)", "number"), ("phase", "Phase correction", "bool"),
+    ("auto_phase1", "Bounded automatic PH0 / PH1 (complex data)", "bool"),
+    ("baseline", "Baseline correction", "bool"),
+    ("masked_baseline", "Exclude main peak and sidebands from baseline", "bool"),
+    ("baseline_degree", "Masked baseline degree (0 / 1 / 2)", "number"),
+    ("baseline_exclusion", "Peak exclusion half-width (ppm)", "number"),
+    ("baseline_anchor_min", "Baseline anchors: minimum distance from 4.5 ppm", "number"),
+    ("sideband_spacing", "Approximate sideband spacing for exclusion (ppm)", "number"),
     ("edge_fraction", "Baseline edge fraction (each end)", "number"),
     ("phase0_offset", "Additional zero-order phase (degrees)", "number"),
     ("phase1_deg", "First-order phase across range (degrees)", "number"),
@@ -226,8 +232,8 @@ class HPreprocessingDialog(tk.Toplevel):
         ttk.Button(left, text="Get preprocessing condition", command=self.get_condition).pack(fill="x", pady=8)
         self.form = Fields(right, PREPROCESS_FIELDS, asdict(common_settings(workspace.spectra)))
         self.form.pack(fill="both", expand=True)
-        ttk.Label(self, text="No intensity normalization. Default: measured overlap within -40 to 50 ppm, the coarsest native grid, no broadening/alignment.\n"
-                  "Inspect the candidate baseline edges and automatic phase. Per-spectrum manual phase overrides are retained when preparing a group; clear an override to restore automatic phase.",
+        ttk.Label(self, text="No intensity normalization. Wide MAS exports: up to -200 to 210 ppm, bounded PH0/PH1 and outer, peak-excluded baseline; narrower exports retain central-band defaults.\n"
+                  "Inspect Phase / baseline QC. Baseline anchors must be signal-free. PH1 uses the current processing span; manual PH0/PH1 overrides remain active for group preparation.",
                   wraplength=1080, padding=8).grid(row=1, column=0, sticky="ew")
         self.status = tk.StringVar(value="Activate sample and matching pristine core together. Applying prepares data in memory; Save to library retains it across launches.")
         ttk.Label(self, textvariable=self.status, wraplength=1080, padding=8).grid(row=2, column=0, sticky="ew")
@@ -283,6 +289,7 @@ QUANT_CALIBRATION = [("standard_area", "Internal standard area", "number"),
                      ("standard_basis", "Standard area basis", "basis"),
                      ("standard_grid_step", "STANDARD original grid step (ppm)", "optional"),
                      ("frequency_mhz", "Frequency (MHz, for Hz area)", "optional"),
+                     ("standard_includes_sidebands", "Standard area includes ALL spinning sidebands", "bool"),
                      ("response_factor", "Sample response multiplier to standard scale", "number"),
                      ("reference_response_factor", "Core response multiplier to standard scale", "number"),
                      ("calibration_verified", "Standard area unit and scale verified", "bool"),
@@ -296,8 +303,17 @@ DECOMPOSITION_FIELDS = [("fit_min", "Fit / component integration minimum (ppm)",
                         ("fwhm_min", "Minimum component FWHM (ppm)", "number"),
                         ("fwhm_max", "Maximum component FWHM (ppm)", "number"),
                         ("line_shape", "Component line shape", ("pseudo_voigt", "gaussian", "lorentzian")),
-                        ("overlap_band", "Add unassigned overlap band between center ranges", "bool")]
-QUANT_REGIONS = DECOMPOSITION_FIELDS + [("assignments_verified", "Component assignments, H count and core model reviewed", "bool")]
+                        ("overlap_band", "Add unassigned overlap band between center ranges", "bool"),
+                        ("sidebands", "Fit / integrate MAS spinning sidebands", "bool"),
+                        ("sideband_order", "Maximum order on EACH side (1-4)", "number"),
+                        ("sideband_spacing", "Estimated sideband spacing (ppm)", "number"),
+                        ("refine_spacing", "Refine estimated spacing (ignored with known MAS / MHz)", "bool"),
+                        ("mas_hz", "Actual 1H MAS rate (Hz; 0 = unknown)", "number"),
+                        ("proton_mhz", "Actual 1H frequency (MHz; 0 = unknown)", "number"),
+                        ("sideband_width_scale", "Sideband / central FWHM multiplier (1 = DMfit link)", "number"),
+                        ("fit_sideband_width", "Fit common sideband-width multiplier", "bool")]
+QUANT_REGIONS = DECOMPOSITION_FIELDS + [("assignments_verified", "Component assignments, H count and core model reviewed", "bool"),
+                        ("sideband_scope_verified", "Included orders, weak peaks, phase and baseline reviewed", "bool")]
 
 
 class HDecompositionStyle:
@@ -363,18 +379,28 @@ class HDecompositionDialog(tk.Toplevel):
         self.columnconfigure(0, weight=1); self.rowconfigure(1, weight=1)
         ttk.Label(self, text="Fit the processed spectrum first. Center bounds guide assignment; component integrals include overlapping tails across the entire fit range. An optional middle band is excluded from ligand area.", wraplength=1220, padding=10).grid(row=0, column=0, sticky="ew")
         panes = ttk.Panedwindow(self, orient='horizontal'); panes.grid(row=1, column=0, sticky='nsew')
-        settings = DecompositionSettings(**sample.metadata.get('decomposition_settings', {}))
+        settings = decomposition_defaults(sample)
         self.form = Fields(panes, DECOMPOSITION_FIELDS, asdict(settings)); panes.add(self.form, weight=0)
         self.form.canvas.configure(width=550)
         self.plot = PlotPane(panes, self.draw, PlotOptions('Chemical shift', 'ppm', 'Intensity', 'a.u.', reverse_x=True), compact=True, export_current_view=True)
-        self.plot.vars['x_min'].set('-10'); self.plot.vars['x_max'].set('20'); panes.add(self.plot, weight=1)
+        self.plot.vars['x_min'].set(str(settings.fit_min)); self.plot.vars['x_max'].set(str(settings.fit_max)); panes.add(self.plot, weight=1)
         self.status = tk.StringVar(value='Fit and inspect both the component curves and residual before accepting assignments.')
         ttk.Label(self, textvariable=self.status, wraplength=1230, padding=8).grid(row=2, column=0, sticky='ew')
         actions = ttk.Frame(self, padding=8); actions.grid(row=3, column=0, sticky='ew')
         ttk.Button(actions, text='Fit and preview', command=self.preview).pack(side='left', padx=4)
+        ttk.Button(actions, text='MAS sideband defaults', command=self.sideband_defaults).pack(side='left', padx=4)
+        ttk.Button(actions, text='Phase / baseline QC...', command=workspace.quality).pack(side='left', padx=4)
         ttk.Button(actions, text='Apply decomposition to spectrum', command=self.apply).pack(side='left', padx=4)
         ttk.Button(actions, text='Close', command=self.destroy).pack(side='right')
+        _wrap_controls(actions)
         self.plot.refresh()
+
+    def sideband_defaults(self):
+        settings = decomposition_defaults(self.sample, use_saved=False)
+        self.form.set_values(asdict(settings)); self.fit = None
+        self.plot.vars['x_min'].set(str(settings.fit_min)); self.plot.vars['x_max'].set(str(settings.fit_max))
+        self.plot.refresh()
+        self.status.set('Estimated spacing is a starting value. For old narrow preprocessing, use Preprocessing > Get preprocessing condition > Apply first. Enter actual MAS Hz / 1H MHz if known.')
 
     def draw(self, axis, options):
         draw_hnmr(axis, self.sample, self.processed, options, self.fit)
@@ -396,6 +422,7 @@ class HDecompositionDialog(tk.Toplevel):
             self.workspace.invalidate_all(fits=False)
             self.sample.metadata.update(decomposition=self.fit.record(), decomposition_settings=asdict(settings))
             self.workspace.fits[self.sample.uid] = self.fit
+            if settings.sidebands: self.workspace.set_view(settings.fit_min, settings.fit_max)
             self.workspace._refresh(); self.destroy()
         except Exception as exc: self.status.set(str(exc))
 
@@ -459,7 +486,8 @@ class QuantDialog(tk.Toplevel):
         else:
             values = {k: row[v] for k, v in (("standard_area", "area"), ("standard_mmol_h", "mmol_h"),
                       ("standard_basis", "basis"), ("standard_grid_step", "grid_step"),
-                      ("frequency_mhz", "frequency_mhz"), ("calibration_verified", "verified"))}
+                      ("frequency_mhz", "frequency_mhz"), ("calibration_verified", "verified"),
+                      ("standard_includes_sidebands", "includes_sidebands"))}
         for f in self.forms: f.set_values(values)
 
     def calculate(self):
@@ -577,6 +605,9 @@ class HNMRTab(ttk.Frame):
                                      ("Show decomposition", self.show_components, self.components_changed)):
             ttk.Checkbutton(controls, text=tr(label), variable=var, command=command).pack(side="left", padx=4)
         ttk.Button(controls, text="Phase override...", command=self.phase_override).pack(side="left", padx=5)
+        ttk.Button(controls, text="Phase / baseline QC...", command=self.quality).pack(side="left", padx=4)
+        ttk.Button(controls, text="Main peak", command=lambda: self.set_view(-10,20)).pack(side="left", padx=4)
+        ttk.Button(controls, text="Full sidebands", command=self.full_view).pack(side="left", padx=4)
         _wrap_controls(controls)
         frame, self.result_tree = _tree(lower, [("metric", "Result / units", 280), ("value", "Value", 300)], height=4, selectmode="browse")
         frame.pack(fill="both", expand=True)
@@ -607,10 +638,13 @@ class HNMRTab(ttk.Frame):
         if errors: messagebox.showerror("H NMR import", "\n".join(errors), parent=self)
 
     def add_spectra(self, spectra):
+        first = not self.spectra
         for s in spectra:
             if s.uid not in {v.uid for v in self.spectra}: self.spectra.append(s)
         self.refresh_rows()
         if spectra: self.tree.selection_set(spectra[-1].uid); self.tree.see(spectra[-1].uid)
+        if first and spectra and spectra[-1].x[0] <= -150 and spectra[-1].x[-1] >= 160:
+            self.plot.vars['x_min'].set('-145'); self.plot.vars['x_max'].set('155')
         self._refresh()
 
     def refresh_rows(self):
@@ -701,19 +735,42 @@ class HNMRTab(ttk.Frame):
         s = self.current()
         if not s: return
         preview_spectrum(s)
-        value = simpledialog.askstring("Phase override", "Zero-order phase in degrees; blank restores automatic phase.\nThis override is retained during group preprocessing.",
-                                       initialvalue=s.metadata.get("manual_phase0", s.processing.get("phase0", 0)), parent=self)
-        if value is not None:
+        dialog = tk.Toplevel(self); dialog.title('Manual PH0 / PH1')
+        values = {'phase0':s.metadata.get('manual_phase0',s.processing.get('phase0',0.)),
+                  'phase1':s.metadata.get('manual_phase1',s.processing.get('phase1',0.))}
+        form = Fields(dialog, [('phase0','PH0 at processing midpoint (degrees)','optional'),
+                               ('phase1','PH1 across processing span (degrees)','optional')], values)
+        form.pack(fill='both', expand=True)
+        cfg=s.processing['settings']
+        ttk.Label(dialog,text=f"Pivot: {(cfg['ppm_min']+cfg['ppm_max'])/2:g} ppm; span: {cfg['ppm_max']-cfg['ppm_min']:g} ppm.\nBoth blank restores automatic phase. Overrides persist through group preprocessing.",wraplength=640,padding=8).pack(fill='x')
+        status=tk.StringVar();ttk.Label(dialog,textvariable=status,foreground='#a00000').pack(fill='x')
+        def apply():
             try:
-                angle = float(value) if value.strip() else None
-                if angle is not None and not np.isfinite(angle): raise ValueError()
-            except ValueError:
-                messagebox.showerror("Phase override", "Enter a finite phase angle or leave blank.", parent=self); return
-            if angle is None: s.metadata.pop("manual_phase0", None)
-            else: s.metadata["manual_phase0"] = angle
-            s.processing.update(phase0=angle, prepared=False, group_id="")
+                values=form.values()
+                if (values['phase0'] is None) != (values['phase1'] is None): raise ValueError('Enter both angles, or leave both blank for automatic correction.')
+                for key,angle in values.items():
+                    if angle is not None and not np.isfinite(angle): raise ValueError('Enter finite angles.')
+                    if angle is None: s.metadata.pop('manual_'+key,None)
+                    else: s.metadata['manual_'+key]=angle
+            except ValueError as exc: status.set(str(exc));return
+            if values['phase0'] is None: s.metadata.pop('manual_phase_reference',None)
+            else: s.metadata['manual_phase_reference']={'pivot':(cfg['ppm_min']+cfg['ppm_max'])/2,'span':cfg['ppm_max']-cfg['ppm_min']}
+            s.processing.update(**values, prepared=False, group_id="")
             s.processing["settings"]["phase"] = True
-            self.invalidate_all(); self.refresh_rows(); self._refresh()
+            self.invalidate_all(); self.refresh_rows(); self._refresh();dialog.destroy()
+        ttk.Button(dialog,text='Apply PH0 / PH1',command=apply).pack(fill='x',padx=8,pady=8)
+
+    def set_view(self, low, high):
+        self.plot.vars['x_min'].set(str(low)); self.plot.vars['x_max'].set(str(high)); self.plot.refresh()
+
+    def full_view(self):
+        s=self.current()
+        if s:
+            p=self.processed(s);self.set_view(p.x[0],p.x[-1])
+
+    def quality(self):
+        s=self.current()
+        if s: HQualityDialog(self,s)
 
     def processed(self, s):
         key = (s.uid, json.dumps(s.processing, sort_keys=True))
@@ -739,7 +796,7 @@ class HNMRTab(ttk.Frame):
                 self.processed(s)
                 self.show_components.set(s.metadata.get("show_decomposition", True))
                 self.phase.set(s.processing["settings"]["phase"]); self.baseline.set(s.processing["settings"]["baseline"])
-                self.status.set(f"{s.name}\n{len(s.x):,} complex points | p0 = {(s.processing.get('phase0') or 0):.3g} deg\n"+
+                self.status.set(f"{s.name}\n{len(s.x):,} complex points | PH0 = {(s.processing.get('phase0') or 0):.3g}, PH1 = {(s.processing.get('phase1') or 0):.3g} deg\n"+
                                 ("Common preprocessing prepared" if s.processing.get("prepared") else "Preview corrections; common preprocessing not prepared"))
             except Exception as exc: self.status.set(str(exc)); return
         self.plot.refresh(); self.result_tree.delete(*self.result_tree.get_children())
@@ -753,7 +810,7 @@ class HNMRTab(ttk.Frame):
         for key in ordered+[k for k in values if k not in ordered]:
             value = values[key]
             self.result_tree.insert("", "end", values=(key.replace("_", " "), "Withheld / undefined" if value is None else f"{value:.10g}"))
-        self.result_status.set(result.quantitative_status if result else "Decomposed signal areas; signal fraction is not surface coverage.")
+        self.result_status.set(result.quantitative_status if result else f"Decomposed signal areas; {len(fit.warnings)} warning(s), see QC/details. Signal fraction is not surface coverage.")
 
     def audit(self):
         s = self.current(); result = self.results.get(s.uid) if s else None
@@ -769,6 +826,59 @@ class HNMRTab(ttk.Frame):
         s = self.current(); result = self.results.get(s.uid) if s else None
         fit = self.fitted(s) if s else None
         if result or fit: save_text(self, result_csv(result) if result else decomposition_csv(fit), "H_NMR_decomposition.csv", ".csv")
+
+
+class HQualityDialog(tk.Toplevel):
+    """Visible correction trace and envelope QC; never treats height equality as phase proof."""
+    def __init__(self, workspace, sample):
+        from .ui import PlotPane
+        super().__init__(workspace); _window(self, 'H NMR phase / baseline / sideband QC', '1330x930')
+        self.sample=sample; self.processed=workspace.processed(sample)
+        p=self.processed; fit=workspace.fitted(sample)
+        diagnostic=fit.audit.get('sideband_diagnostics',{}) if fit else p.audit.get('sideband_diagnostics',{})
+        body=ttk.Panedwindow(self,orient='vertical');body.pack(fill='both',expand=True)
+        top=ttk.Frame(body);bottom=ttk.Frame(body);body.add(top,weight=3);body.add(bottom,weight=2)
+        self.plot=PlotPane(top,self.draw,PlotOptions('Chemical shift','ppm','Intensity','a.u.',reverse_x=True),compact=True,export_current_view=True)
+        self.plot.vars['x_min'].set(str(p.x[0]));self.plot.vars['x_max'].set(str(p.x[-1]));self.plot.pack(fill='both',expand=True)
+        note=(f"PH0 {p.audit['auto_phase0_deg']:.3f} deg; PH1 {p.audit.get('auto_phase1_deg',0):.3f} deg across {p.x[-1]-p.x[0]:g} ppm. "
+              f"Pivot {p.audit['phase_pivot_ppm']:g} ppm. Detected sideband envelopes: {diagnostic.get('detected_sideband_envelopes','n/a')}.\n"
+              "Positions follow a common spacing; +/- heights need not be equal. Weak outer peaks remain uncertain. Peak count alone does not establish aliphatic/aromatic assignment.")
+        ttk.Label(bottom,text=note,wraplength=1250,padding=8).pack(fill='x')
+        frame, self.tree=_tree(bottom,[('order','Order',70),('status','Envelope status',240),('ppm','Peak ppm',110),
+            ('snr','Prominence / noise',150),('neg','Negative fraction',150),('error','Local RMSE / peak',160),
+            ('ali','Aliphatic area',160),('aro','Aromatic area',160)],height=5)
+        self.tree.column('order',stretch=False);self.tree.column('status',stretch=True)
+        frame.pack(fill='both',expand=True)
+        local={r['order']:r['RMSE_over_local_peak'] for r in fit.audit.get('local_fit_errors',[])} if fit else {}
+        areas={(r['order'],r['family']):r['area'] for r in fit.audit.get('lines',[])} if fit else {}
+        for row in diagnostic.get('envelopes',[]):
+            self.tree.insert('','end',values=(f"{row['order']:+d}",row['status'],
+                '' if row['peak_ppm'] is None else f"{row['peak_ppm']:.3f}",'' if row['SNR'] is None else f"{row['SNR']:.2f}",
+                '' if row['negative_fraction'] is None else f"{row['negative_fraction']:.1%}",
+                '' if row['order'] not in local else f"{local[row['order']]:.1%}",
+                *['' if (row['order'],family) not in areas else f"{areas[row['order'],family]:.6g}" for family in ('aliphatic','aromatic')]))
+        warnings=p.audit.get('phase_diagnostics',{}).get('warnings',[])+(fit.warnings if fit else diagnostic.get('warnings',[]))
+        ttk.Label(bottom,text='\n'.join(warnings[:4])+('\nMore warnings in the complete QC record.' if len(warnings)>4 else '') or 'Inspect residual absorption/dispersion and baseline anchors; automatic correction is a proposal.',
+                  foreground='#983814',wraplength=1250,padding=8).pack(fill='x')
+        self.audit=json.dumps({'preprocessing':p.audit,'fit':fit.audit if fit else None},indent=2,ensure_ascii=False)
+        row=ttk.Frame(self,padding=8);row.pack(fill='x')
+        ttk.Button(row,text='Save complete QC record...',command=lambda:save_text(self,self.audit,'H_NMR_QC.json','.json')).pack(side='left',padx=4)
+        ttk.Button(row,text='Close',command=self.destroy).pack(side='right')
+        self.after_idle(lambda:body.sashpos(0,int(body.winfo_height()*.58)))
+        self.plot.refresh()
+
+    def draw(self, axis, options):
+        p=self.processed;s=self.sample
+        colors=s.metadata.setdefault('qc_curve_colors',{})
+        for key,label,y,default,style in (
+            ('raw','Raw real',np.interp(p.x-p.audit['shift_added_ppm'],s.x,s.real),'#a49f9f','-'),
+            ('phased','Phased, before baseline',p.y+p.baseline,'#002060','-'),
+            ('corrected','Corrected real',p.y,'#000000','-'),
+            ('baseline','Subtracted baseline',p.baseline,'#c00000','--')):
+            color=curve_color(axis,s.uid+':qc:'+key,label,default,colors,key)
+            axis.plot(p.x,y,color=color,lw=options.line_width,ls=style,label=label)
+        axis.axhline(0,color='#006c31',lw=.6,ls=':')
+        # PlotPane applies common axes, legend and export settings after drawing.
 
 
 class NMRWorkspace(ttk.Frame):

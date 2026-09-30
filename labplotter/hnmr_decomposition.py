@@ -26,9 +26,17 @@ class DecompositionSettings:
     fwhm_max: float = 25.
     line_shape: str = "pseudo_voigt"
     overlap_band: bool = False
+    sidebands: bool = False
+    sideband_order: int = 2
+    sideband_spacing: float = 55.
+    refine_spacing: bool = True
+    mas_hz: float = 0.
+    proton_mhz: float = 0.
+    sideband_width_scale: float = 1.
+    fit_sideband_width: bool = True
 
     def validate(self):
-        numbers = [v for k, v in asdict(self).items() if k not in ("line_shape", "overlap_band")]
+        numbers = [v for k, v in asdict(self).items() if k != "line_shape" and not isinstance(v, bool)]
         if not np.isfinite(numbers).all():
             raise ValueError("Decomposition bounds must be finite.")
         if not self.fit_min < self.aliphatic_min < self.aliphatic_max < self.aromatic_min < self.aromatic_max < self.fit_max:
@@ -37,7 +45,30 @@ class DecompositionSettings:
             raise ValueError("Use positive increasing FWHM bounds, at most twice the fit span.")
         if self.line_shape not in ("pseudo_voigt", "gaussian", "lorentzian"):
             raise ValueError("Choose pseudo_voigt, gaussian or lorentzian.")
+        if self.sideband_order != int(self.sideband_order) or not 1 <= self.sideband_order <= 4:
+            raise ValueError("Sideband order must be an integer from 1 to 4 (each side).")
+        self.sideband_order = int(self.sideband_order)
+        if not 10 <= self.sideband_spacing <= 200 or not .25 <= self.sideband_width_scale <= 8:
+            raise ValueError("Sideband spacing: 10–200 ppm; width multiplier: 0.25–8.")
+        if self.mas_hz < 0 or self.proton_mhz < 0 or bool(self.mas_hz) != bool(self.proton_mhz):
+            raise ValueError("Enter both MAS rate (Hz) and 1H frequency (MHz), or leave both at 0 (unknown).")
+        spacing = self.mas_hz/self.proton_mhz if self.mas_hz else self.sideband_spacing
+        if self.sidebands and (spacing < 10 or self.fit_min > self.aliphatic_min-self.sideband_order*spacing or
+                              self.fit_max < self.aromatic_max+self.sideband_order*spacing):
+            raise ValueError("Fit range must cover all selected sideband centers. Expand preprocessing and fit bounds.")
         return self
+
+
+def decomposition_defaults(spectrum, use_saved=True):
+    """Data-aware defaults; old saved central-only models remain inspectable."""
+    saved = spectrum.metadata.get('decomposition_settings') if use_saved else None
+    if saved:
+        return DecompositionSettings(**saved).validate()
+    if spectrum.x[0] <= -150 and spectrum.x[-1] >= 160:
+        from .hnmr_quality import estimate_spacing
+        spacing, _ = estimate_spacing(spectrum.x, spectrum.real+1j*spectrum.imag)
+        return DecompositionSettings(fit_min=-145., fit_max=155., sidebands=True, sideband_spacing=spacing)
+    return DecompositionSettings()
 
 
 def profile(x, amplitude, center, fwhm, eta):
@@ -88,14 +119,19 @@ def _domain(p, settings):
 def _result(p, audit):
     settings = DecompositionSettings(**audit['settings']).validate()
     x, y = _domain(p, settings)
-    curves = {name: profile(x, *params) for name, params in audit['parameters'].items()}
+    if audit.get('lines'):
+        curves = {name: np.zeros_like(x) for name in audit['areas']}
+        for line in audit['lines']:
+            curves[line['family']] += profile(x, *line['parameters'])
+    else:
+        curves = {name: profile(x, *params) for name, params in audit['parameters'].items()}
     total = sum(curves.values())
     return DecompositionResult(x, y, curves, total, y-total, dict(audit['areas']), audit)
 
 
 def restore_decomposition(p, record):
     """A stored fit is never reused after data, phase, grid or baseline changes."""
-    if not record or record.get('version') != 1 or record.get('processed_sha256') != fingerprint(p):
+    if not record or record.get('version') not in (1, 2) or record.get('processed_sha256') != fingerprint(p):
         return None
     try:
         return _result(p, record)
@@ -105,6 +141,9 @@ def restore_decomposition(p, record):
 
 def decompose(p, settings=None):
     settings = (settings or DecompositionSettings()).validate()
+    if settings.sidebands:
+        from .hnmr_sidebands import fit_sidebands
+        return fit_sidebands(p, settings)
     x, y = _domain(p, settings)
     scale = float(np.max(np.abs(y)))
     if scale <= 0 or np.std(y) <= scale*1e-10:
@@ -182,15 +221,25 @@ def decompose(p, settings=None):
 
 def decomposition_values(fit):
     a, b = fit.areas['aliphatic'], fit.areas['aromatic']
-    return {'aliphatic_integral': a, 'aromatic_integral': b,
+    values = {'aliphatic_integral': a, 'aromatic_integral': b,
             'unassigned_integral': fit.areas.get('unassigned', 0.),
             'aliphatic_aromatic_ratio': a/b if b else None,
             'aliphatic_signal_fraction_percent': 100*a/(a+b) if a+b else None,
             'sample_fit_R2': fit.audit['fit_R2'], 'fit_RMSE': fit.audit['RMSE']}
+    for family, parts in fit.audit.get('area_breakdown', {}).items():
+        values[family+'_central_integral'] = parts['central']
+        values[family+'_sideband_integral'] = parts['sidebands']
+    if 'spacing_ppm' in fit.audit:
+        values['sideband_spacing_ppm'] = fit.audit['spacing_ppm']
+        values['detected_sideband_envelopes'] = fit.audit['sideband_diagnostics']['detected_sideband_envelopes']
+    return values
 
 
 def decomposition_csv(fit):
     stream = io.StringIO()
-    np.savetxt(stream, np.column_stack([fit.x, fit.observed, *fit.curves.values(), fit.total, fit.residual]),
-               delimiter=',', header='ppm,processed,'+','.join(fit.curves)+',total_fit,residual', comments='', fmt='%.12g')
+    lines = fit.audit.get('lines', [])
+    extra = [profile(fit.x, *line['parameters']) for line in lines]
+    labels = [f"{line['family']}_order_{line['order']:+d}" for line in lines]
+    np.savetxt(stream, np.column_stack([fit.x, fit.observed, *fit.curves.values(), fit.total, fit.residual, *extra]),
+               delimiter=',', header=','.join(['ppm','processed',*fit.curves,'total_fit','residual',*labels]), comments='', fmt='%.12g')
     return stream.getvalue()

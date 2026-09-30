@@ -7,9 +7,9 @@ from tkinter import ttk, font as tkfont
 from unittest.mock import patch
 import unittest
 import numpy as np
-from labplotter.hnmr import common_settings, prepare_spectra, quantify, QuantSettings
+from labplotter.hnmr import common_settings, prepare_spectra, preview_spectrum, quantify, QuantSettings
 from labplotter.hnmr_library import HNMRLibrary,HNMRParameterLibrary
-from labplotter.hnmr_ui import HNMRTab,HPreprocessingDialog,HDecompositionDialog,QuantDialog,ParameterWindow,NMRWorkspace
+from labplotter.hnmr_ui import HNMRTab,HPreprocessingDialog,HDecompositionDialog,HQualityDialog,QuantDialog,ParameterWindow,NMRWorkspace
 from labplotter.nmr_ui import nmr_tree_style
 from test_hnmr import fixture
 
@@ -122,6 +122,27 @@ class HNMRDesktopTests(unittest.TestCase):
         doc=window.document;doc['cores'][0]['capacity']=.27;window.commit(doc);window.destroy()
         self.assertEqual(self.tab.parameters.load()['cores'][0]['capacity'],.27)
         self.assertIsNone(self.tab.parameters.load()['ligands'][-1]['effective_h'])
+        self.assertFalse(self.errors)
+
+    def test_sideband_qc_full_view_styles_and_library_preserve_orders(self):
+        from test_hnmr_sidebands import mas_fixture
+        from labplotter.hnmr_decomposition import decomposition_defaults,decompose
+        s=mas_fixture();prepare_spectra([s],replace(common_settings([s]),phase=False,baseline=False))
+        settings=replace(decomposition_defaults(s),line_shape='gaussian',sideband_spacing=55,refine_spacing=False,fit_sideband_width=False)
+        fit=decompose(preview_spectrum(s),settings)
+        s.metadata.update(decomposition=fit.record(),decomposition_settings=fit.audit['settings'])
+        self.tab.add_spectra([s]);self.tab.full_view();self.root.update()
+        self.assertGreater(max(self.tab.plot.axis.get_xlim()),150)
+        self.assertEqual(len(self.tab.plot.axis.lines),5)
+        d=HQualityDialog(self.tab,s);self.root.update()
+        self.assertEqual(len(d.tree.get_children()),6)
+        self.assertEqual(len(d.plot.axis.lines),5)
+        self.assertEqual(len(d.plot.axis._labplotter_color_series),4)
+        self.assertTrue(d.plot.export_current_view)
+        d.destroy();self.tab.save();loaded=self.tab.library.load(s.uid)
+        self.assertEqual(len(loaded.metadata['decomposition']['lines']),10)
+        self.tab.set_view(-10,20);self.root.update()
+        self.assertEqual(loaded.processing['group_id'],s.processing['group_id'])
         self.assertFalse(self.errors)
 
 
