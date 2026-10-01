@@ -9,7 +9,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from threadpoolctl import threadpool_limits
 from .hnmr_decomposition import _domain, _result, fingerprint, profile, profile_area
-from .hnmr_quality import sideband_diagnostics
+from .hnmr_quality import sideband_diagnostics, estimate_spacing
 
 
 def fit_sidebands(p, settings):
@@ -27,32 +27,40 @@ def fit_sidebands(p, settings):
                           np.flatnonzero((x > -15) & (x < 20))[::max(1, int(1/(x[1]-x[0])/12))]])
     xx, yy = x[ids], y[ids]/scale
     variable_eta = settings.line_shape == 'pseudo_voigt'
-    shape_size = 3 if variable_eta else 2
+    shape_layout = []
+    cursor = 0
+    for name in names:
+        gaussian = getattr(settings, name+'_gaussian_fraction', None)
+        free_eta = variable_eta and gaussian is None
+        fixed_eta = 1.-gaussian if gaussian is not None else float(settings.line_shape == 'lorentzian')
+        shape_layout.append((cursor, free_eta, fixed_eta))
+        cursor += 3 if free_eta else 2
     spacing = settings.mas_hz/settings.proton_mhz if settings.mas_hz else settings.sideband_spacing
     variable_spacing = settings.refine_spacing and not settings.mas_hz
-    shape_end = len(names)*shape_size
+    shape_end = cursor
     amp_end = shape_end+len(names)*len(orders)
 
     def expand(v):
-        shapes = v[:shape_end].reshape(len(names), shape_size)
+        shapes = [(v[offset], v[offset+1], v[offset+2] if free else fixed)
+                  for offset, free, fixed in shape_layout]
         amps = v[shape_end:amp_end].reshape(len(names), len(orders))
-        eta = shapes[:, 2] if variable_eta else np.full(len(names), float(settings.line_shape == 'lorentzian'))
         cursor = amp_end
         delta = v[cursor] if variable_spacing else spacing
         cursor += int(variable_spacing)
         width_scale = v[cursor] if settings.fit_sideband_width else settings.sideband_width_scale
-        return [(name, order, [amps[i,j], shapes[i,0]+order*delta,
-                shapes[i,1]*(width_scale if order else 1.), eta[i]])
+        return [(name, order, [amps[i,j], shapes[i][0]+order*delta,
+                shapes[i][1]*(width_scale if order else 1.), shapes[i][2]])
                 for i,name in enumerate(names) for j,order in enumerate(orders)], float(delta), float(width_scale)
 
     def model(v, grid=xx):
         return sum(profile(grid, *row) for _,_,row in expand(v)[0])
 
     low, high = [], []
-    for lo, hi in bounds:
+    for (lo, hi), (_, free_eta, _) in zip(bounds, shape_layout):
         low.extend([lo, settings.fwhm_min]); high.extend([hi, settings.fwhm_max])
-        if variable_eta: low.append(0.); high.append(1.)
-    low += [0.]*(len(names)*len(orders)); high += [5.]*(len(names)*len(orders))
+        if free_eta: low.append(0.); high.append(1.)
+    low += [-5. if settings.allow_negative_sidebands and order else 0. for _ in names for order in orders]
+    high += [5.]*(len(names)*len(orders))
     if variable_spacing:
         # Fit all centers inside measured data, even at the search boundaries.
         upper = min(spacing*1.12, (settings.aliphatic_min-settings.fit_min)/settings.sideband_order,
@@ -65,7 +73,7 @@ def fit_sidebands(p, settings):
             initial = []
             for i, (lo, hi) in enumerate(bounds):
                 initial.extend([lo+(fraction if i==0 else .5)*(hi-lo), np.clip(width, settings.fwhm_min*1.01, settings.fwhm_max*.99)])
-                if variable_eta: initial.append(eta0)
+                if shape_layout[i][1]: initial.append(eta0)
             for _ in names:
                 initial += [.5 if order==0 else (.025 if abs(order)==1 else .003) for order in orders]
             if variable_spacing: initial.append(np.clip(spacing, low[-1-int(settings.fit_sideband_width)] if settings.fit_sideband_width else low[-1],
@@ -86,7 +94,8 @@ def fit_sidebands(p, settings):
     for name, order, params in expanded:
         params = [float(v) for v in params]; params[0] *= scale
         area = profile_area(settings.fit_min, settings.fit_max, *params)
-        lines.append({'family':name, 'order':int(order), 'parameters':params, 'area':area,
+        full_area = params[0]*params[2]*((1-params[3])*np.sqrt(np.pi)/(2*np.sqrt(np.log(2)))+params[3]*np.pi/2)
+        lines.append({'family':name, 'order':int(order), 'parameters':params, 'area':area, 'full_profile_area':float(full_area),
                       'envelope_detected':bool(order==0 or detected.get(order,False))})
         breakdown[name]['central' if order==0 else 'sidebands'] += area
     areas = {name:sum(parts.values()) for name,parts in breakdown.items()}
@@ -103,10 +112,16 @@ def fit_sidebands(p, settings):
         local_errors.append({'order':n,'RMSE_over_local_peak':relative})
         if n and detected.get(n,False) and relative>.25:
             warnings.append(f'Order {n:+d}: local fit RMSE exceeds 25% of its peak; the global R2 can hide this mismatch.')
+    boundary_components = []
     for i, (name, bound) in enumerate(zip(names, bounds)):
-        shape = best.x[i*shape_size:(i+1)*shape_size]
+        offset = shape_layout[i][0]
+        shape = best.x[offset:offset+2]
         if min(shape[0]-bound[0],bound[1]-shape[0]) < .005*(bound[1]-bound[0]):
+            boundary_components.append(name)
             warnings.append(f'{name}: center reached an assignment bound; component separation is uncertain.')
+        if min(shape[1]-settings.fwhm_min,settings.fwhm_max-shape[1]) < .002*(settings.fwhm_max-settings.fwhm_min):
+            boundary_components.append(name)
+            warnings.append(f'{name}: width reached a bound; component area needs review.')
     # Covariance reports identifiability only, not calibrated confidence limits.
     with threadpool_limits(limits=1):
         covariance = np.linalg.pinv(best.jac.T@best.jac)*2*best.cost/max(1,len(xx)-len(best.x))
@@ -114,21 +129,50 @@ def fit_sidebands(p, settings):
     corr=np.divide(covariance,denom,out=np.zeros_like(covariance),where=denom>0);np.fill_diagonal(corr,0)
     correlation=float(np.max(abs(corr)))
     if correlation>.98: warnings.append('Strong parameter correlation (>0.98): chemical-family areas are not uniquely established by a good fit.')
-    fractions={}
+    fractions={}; full_areas={}
     for name in names:
         infinite=sum(row['parameters'][0]*row['parameters'][2]*((1-row['parameters'][3])*np.sqrt(np.pi)/(2*np.sqrt(np.log(2)))+row['parameters'][3]*np.pi/2)
                      for row in lines if row['family']==name)
         fractions[name]=areas[name]/infinite if infinite else None
+        full_areas[name]=float(infinite)
     if any(v is not None and v<.98 for v in fractions.values()):
         warnings.append('More than 2% of a fitted infinite profile lies beyond the integration bounds. Reported integrals use measured finite bounds only.')
-    audit = {'version':2,'settings':asdict(settings),'processed_sha256':fingerprint(p),
+    if any(line['area'] < 0 for line in lines):
+        warnings.append('Signed satellite fit contains negative component areas. They are retained, not clipped; this diagnostic model does not establish physical populations.')
+    observed_spacing, observed_source = estimate_spacing(p.x, p.y+1j*p.imaginary)
+    processing = p.audit.get('settings', {})
+    processing_spacing = processing.get('sideband_spacing', delta)
+    processing_mismatch = bool(settings.mas_hz and (processing.get('phase') or processing.get('baseline'))
+                               and abs(processing_spacing-delta) > .02*delta)
+    if processing_mismatch:
+        warnings.append('Preprocessing exclusion spacing differs from the fixed fitting spacing. Reapply common preprocessing with the same MAS/MHz before quantitation.')
+    if settings.mas_hz and abs(observed_spacing-delta)/delta > .05 and observed_source.startswith('estimated'):
+        warnings.append(f'Envelope-based spacing estimate {observed_spacing:.3f} ppm differs from MAS/MHz = {delta:.3f} ppm. Overlap/phase can move maxima; verify acquisition and ppm calibration. The axis was not rescaled.')
+    alternatives=[]
+    for candidate in candidates:
+        component_areas={name:0. for name in names}
+        for name, _, pars in expand(candidate.x)[0]:
+            component_areas[name] += profile_area(settings.fit_min, settings.fit_max, *pars)*scale
+        alternatives.append({'relative_cost':float(candidate.cost/max(best.cost,1e-30)), 'areas':component_areas})
+    near=[a for a in alternatives if a['relative_cost'] <= 1.01]
+    spread={name:float(max(a['areas'][name] for a in near)-min(a['areas'][name] for a in near)) for name in names}
+    unstable=any(spread[name] > .1*max(abs(areas[name]),1e-30) for name in names)
+    if unstable: warnings.append('Near-equivalent fits differ by more than 10% in component area; assignments are not stable.')
+    audit = {'version':3,'settings':asdict(settings),'processed_sha256':fingerprint(p),
              'model':'Empirical linked MAS sidebands; not a CSA/dipolar simulation',
              'lines':lines,'parameters':{row['family']:row['parameters'] for row in lines if row['order']==0},
              'parameter_order':['height','center_ppm','FWHM_ppm','Lorentzian_fraction'],
              'areas':areas,'area_breakdown':breakdown,'area_domain_ppm':[settings.fit_min,settings.fit_max],
+             'full_profile_areas':full_areas, 'full_profile_note':'Analytic extrapolation to infinite profile tails, for DMfit-style comparison; not substituted for measured-domain integrals.',
              'area_method':'Sum of analytic finite-domain integrals of order 0 and every fitted +/- order, including tails. No central-area multiplier.',
              'spacing_ppm':delta,'spacing_source':'MAS_Hz / 1H_MHz (fixed)' if settings.mas_hz else 'estimated / fitted from data; acquisition metadata unconfirmed',
              'width_multiplier':width_scale,'fit_R2':r2,'RMSE':float(np.sqrt(np.mean(residual**2))),
+             'dmfit_width_link':not settings.fit_sideband_width and settings.sideband_width_scale == 1.,
+             'observed_envelope_spacing_ppm':observed_spacing, 'observed_spacing_source':observed_source,
+             'preprocessing_spacing_mismatch':processing_mismatch,
+             'boundary_components':sorted(set(boundary_components)),
+             'assignment_ambiguous':bool(boundary_components or correlation>.98 or unstable),
+             'starting_solutions':alternatives,'near_solution_area_spread':spread,
              'max_residual_percent_of_peak':float(np.max(abs(residual))/scale*100),
              'fit_points':len(x),'optimizer_points':len(xx),'converged_starts':len(candidates),
              'max_abs_parameter_correlation':correlation,'fraction_of_full_profile_in_domain':fractions,

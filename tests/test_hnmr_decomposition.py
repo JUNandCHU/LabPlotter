@@ -56,7 +56,7 @@ class DecompositionTests(unittest.TestCase):
     def test_unknown_calibration_withholds_absolute_coverage_not_components(self):
         a,b=fixture('PDA-C6',40),fixture()
         prepare_spectra([a,b],replace(common_settings([a,b]),phase=False,baseline=False))
-        q=QuantSettings(line_shape='gaussian',sample_mass_mg=10,reference_mass_mg=10)
+        q=QuantSettings(line_shape='gaussian',sample_mass_mg=10,reference_mass_mg=10,show_provisional=False)
         r=quantify(a,b,q)
         self.assertIsNone(r.values['apparent_coverage_percent']);self.assertIsNone(r.values['ligand_umol'])
         self.assertGreater(r.values['aliphatic_integral'],0)
@@ -71,17 +71,17 @@ class DecompositionTests(unittest.TestCase):
         a,b=fixture('PDA-C6',40),fixture()
         a.real += 80*np.exp(-.5*((a.x-7.3)/.6)**2)
         prepare_spectra([a,b],replace(common_settings([a,b]),phase=False,baseline=False))
-        q=QuantSettings(line_shape='gaussian',sample_mass_mg=10,reference_mass_mg=10)
+        q=QuantSettings(core_scaling='mass',line_shape='gaussian',sample_mass_mg=10,reference_mass_mg=10)
         r=quantify(a,b,q)
         self.assertEqual(r.values['core_scale'],1.)
         self.assertAlmostEqual(r.values['excess_aliphatic_area'],40*.35*np.sqrt(2*np.pi),places=5)
-        with self.assertRaisesRegex(ValueError,'retired'):quantify(a,b,replace(q,core_scaling='aromatic'))
+        with self.assertRaisesRegex(ValueError,'Choose aromatic_reference'):quantify(a,b,replace(q,core_scaling='aromatic'))
         self.assertIn('reference_total_fit',result_csv(r).splitlines()[0])
 
     def test_legacy_parameters_migrate_without_reusing_verification(self):
         s=fixture('PDA-C6');s.metadata['analysis_parameters']={'method':'regions','core_scaling':'aromatic','calibration_verified':True,'assignments_verified':True}
         q=restored_quant_settings(s,default_parameters())
-        self.assertEqual(q.method,'decomposition');self.assertEqual(q.core_scaling,'mass')
+        self.assertEqual(q.method,'decomposition');self.assertEqual(q.core_scaling,'aromatic_reference')
         self.assertFalse(q.calibration_verified);self.assertFalse(q.assignments_verified)
 
 

@@ -1,8 +1,95 @@
-# LabPlotter 0.10.2
+# LabPlotter 0.10.8
+
+## 0.10.9: 새 모델2와 간결한 H NMR 결과표
+
+- **Decomposition 또는 Quantitative analysis → model Ver2**를 선택하면 ANP 보고서의 `broad_core3` 모델을 사용합니다. 기존 **model Ver1이 기본값**입니다. 0.10.7–0.10.8에서 저장한 모델2는 `Legacy core template`이라는 이름으로 그대로 열립니다.
+- 새 모델2는 **aliphatic / aromatic / 넓은 미배정 성분**과 각 위성 피크를 분리합니다. 실제부·허수부를 함께 사용하여 PH0/PH1과 복소 선형 배경을 적합합니다. 각 ±위성 높이는 독립적이며, 미배정 면적을 aliphatic 또는 aromatic에 넣지 않습니다. 기본 중심 범위는 −0.5–3.5 / 5.5–9 / 2–9 ppm, FWHM 범위는 0.3–15 / 0.3–15 / 14–50 ppm입니다.
+- 기본 복소 fitting 범위는 −170–180 ppm, 성분 적분 범위는 −145–155 ppm입니다. 실제 공통 데이터 범위 안에서만 적합하며, 20 kHz / 400 MHz에서 위성 간격은 50 ppm입니다. PH0 ±30°, PH1 ±180°의 경계는 수정할 수 있습니다. phase/baseline을 끄면 해당 보정도 꺼지고, 수동 phase는 고정됩니다. 허수 데이터가 없거나 smoothing을 적용했다면 현재 처리된 실제부로 분해하고 이를 기록합니다.
+- **Quantitative analysis → Aromatic correction**: `On — aromatic reference`는 기존 aromatic 정규화 계산, `Off — entered masses`는 입력한 두 시료 질량을 반영한 core aliphatic 차감입니다. 기존 저장 설정과 기본 On 설정을 유지합니다. Off에서 알려진 core 질량이 비어 있으면 시료 전체 질량을 core 질량 근사로 사용합니다.
+- 그래프 아래에는 **Sample / Aromatic / Aliphatic / Ligand coverage**만 표시합니다. `Area display`에서 **µmol H/mg ↔ Raw integral (intensity·ppm)**을 전환할 수 있습니다. µmol H/mg 열은 aromatic 정규화 **전**의 시료 값입니다. coverage만 선택한 보정법을 반영합니다. 분석하지 않은 행은 빈값으로 표시됩니다.
+- coverage 범위는 기존 Schiff/Michael H-count 가정의 두 경계입니다. 기본 C–H 기반 단일 추정값과 양쪽 경계, 미배정 면적, 정규화 인자, 각 위성 면적, 모든 가정과 경고는 **More info**에 있습니다. 음수 또는 100% 초과를 숨기거나 0–100%로 자르지 않습니다. 숫자 드래그 복사와 표 전체 복사를 지원합니다.
+- 실제 ANP 5종의 보고서 적분값 재현 오차는 0.001% 미만입니다. 이는 구현 일치 확인이며, 분해의 화학적 유일성이나 coverage 정확도를 확정하지 않습니다. 특히 Plus/Arg의 phase 경계 도달과 미배정 성분의 불확실성은 추가 정보에 남깁니다.
+- 누적 `.labpatch`는 **0.10.0 또는 0.10.8에서 0.10.9로 바로 적용**할 수 있습니다. 프로그램의 업데이트 패치 적용 메뉴에서 파일을 선택합니다. 라이브러리와 개인 파라미터는 초기화하지 않으며, 기존 코드 백업과 원복 기능을 유지합니다.
+
+아래 0.10.7–0.10.8 설명의 ‘Ver2 core template’은 이제 **Legacy core template**을 의미합니다.
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer, Lab DLS 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
 
-## 0.10.2 H NMR: MAS sideband 포함 분해·적분
+## 0.10.8 Ver2 정량 계산 오류 수정
+
+- `Confirm parameters and calculate`에서 발생하던 **`'float' object cannot be interpreted as an integer`** 오류를 수정했습니다. 입력창의 위성 차수 `2`가 `2.0`으로 전달될 때, Ver2에서 검증된 정수 값을 유지하지 못한 문제였습니다.
+- ANP 자신의 blank 검사, 수정 시료, 공통 전처리 적용/미적용, 저장된 설정과 batch 계산 경로에 적용됩니다. 2.5 같은 소수 차수는 정수로 반올림하지 않고 올바른 입력을 요구합니다. 기존 피팅 조건·질량·H 수·coverage 식은 유지합니다.
+- **`LabPlotter_Any_to_0.10.8.labpatch`를 적용하고 재시작한 뒤 같은 조건으로 다시 계산**하세요. 원본을 다시 export하거나 파라미터를 바꿀 필요가 없습니다. 0.10.7 및 이전 0.10.x에서 누적 적용할 수 있고 개인 라이브러리는 초기화하지 않습니다.
+- 이번 회귀 검증은 화면 없이도 실제 데스크톱 입력값 변환을 실행하여 정수/소수 자료형 문제가 재발하는지 확인합니다. Windows 창의 시각적 배치는 별도 검증 대상입니다.
+
+## 0.10.7 H NMR 모델 선택 / 결합 방식별 coverage 범위
+
+**적용:** `LabPlotter_Any_to_0.10.7.labpatch`를 앱 패치 메뉴 또는 `apply_update.bat`로 적용하고 재시작합니다. 이전 0.10.x에서 누적 적용할 수 있으며 개인 라이브러리는 초기화하지 않습니다. 저장된 결과는 자동 재계산하지 않습니다.
+
+1. 수정 시료와 해당 pristine **PDA 또는 ANP**를 불러오고 **Preprocessing**에서 함께 공통 조건을 적용합니다. intensity 정규화는 하지 않습니다.
+2. **Decomposition… → Decomposition model** 또는 **Quantitative analysis → Sample and core → Decomposition model**에서 **model Ver1 / model Ver2**를 선택합니다. 새 데이터와 기존 모델 기록의 기본값은 **Ver1**입니다. 선택한 모델은 데이터별로 저장되며 라이브러리에서 복원됩니다.
+3. **Ver1**은 기존 aliphatic/aromatic envelope와 위성 피크를 분해합니다. 기존 aromatic-reference 정량식과 명목 coverage를 유지합니다. **Ver2**는 `시료 = a × 실측 pristine core + 추가 ligand 성분 [+ 미배정 성분]`을 피팅합니다. Ver2 reference에서 해당 pristine 데이터를 선택하세요. core 전체를 aromatic이라고 재명명하지 않습니다.
+4. Ver2 기본 추가 성분 중심은 **−0.5~3 ppm**, FWHM **0.3~15 ppm**, core shift **±0.3 ppm**, 추가 core broadening **0**입니다. 모두 편집 가능하며 core 쪽은 측정된 모양을 사용합니다. Ver2에서는 `Additional ligand G fraction`으로 추가 ligand 성분의 G 비율을 설정하며 aromatic G 값은 사용하지 않습니다. 기본 넓은 데이터 조건은 기존과 같은 **400 MHz / 20 kHz, 50 ppm 간격, 양쪽 2차 위성**, 피팅 범위 −145~155 ppm입니다. fit 범위와 허용 shift 전체를 덮는 reference 데이터가 필요합니다.
+5. **Fit and preview → Apply decomposition** 후 **Quantitative analysis**에서 질량·표준·H 수·최대 loading을 확인하고 계산합니다. Ver2 `core_reference`는 `loading = (추가 ligand 면적/a) × reference response × (표준 μmol H/표준 면적) / (H 수 × reference 질량)`입니다. `coverage = loading / 최대 loading × 100`입니다. 시료 질량은 이 coverage 식에서 소거되고 **reference 질량은 남습니다**. `mass` 모드는 독립적으로 아는 core 질량으로 a를 고정합니다. a 자체를 측정 질량비로 취급하지 않습니다.
+6. 하단 표에 두 모델 모두 **Schiff coverage, Michael coverage, coverage lower/upper**, 실제 사용한 두 H 수를 표시합니다. **Michael scenario includes one linkage N-H (if captured)**이 기본 켜짐이므로 C6는 **13/14**, C18은 **37/38**입니다. 끄면 C–H만 적분한다는 가정으로 두 H 수와 경계가 같아집니다. **Schiff/Michael H override**를 입력하면 해당 값을 우선 적용합니다. 개별 설정은 spectrum library, 공통 리간드 기본값은 parameter library에 저장합니다. Lys의 미확정 H 수는 임의로 채우지 않습니다.
+
+H 수 비교는 **중성·단일 결합 primary amine**에 대한 구조적 가정입니다. alkyl C–H는 Schiff와 Michael에서 같고 차이는 연결 N–H(0/1)가 실제 적분에 잡히는지입니다. N–H 교환·protonation·다중 결합·core H 변화는 이 두 경계로 자동 설명되지 않습니다. 따라서 표시 범위는 **H 수 가정별 시나리오 범위**이며 신뢰구간이나 실제 반응 비율이 아닙니다. 반응 경로의 근거와 한계는 [Yang et al., PLOS One 2016](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0166490)의 catechol/primary amine 연구를 참고했습니다. 현재 ANP/PDA의 실제 결합 경로를 확인한 것으로 간주하지 않습니다.
+
+두 모델 모두 component/sum/residual overlay, 색·굵기·선 모양·면적 음영, 현재 화면 이미지/클립보드, CSV, 계산 상세 기록, batch, library, model/phase sensitivity를 사용합니다. Ver2는 template snapshot과 reference 식별/처리 정보를 저장하므로 수정 시료 하나만 재불러와도 저장된 곡선을 그릴 수 있습니다. **새 재계산/위상 민감도 검토에는 원본 pristine reference도 불러와야 합니다.** Phase sensitivity는 시료/reference PH0를 독립적으로 바꾸는 9가지 조합이며 현재 저장 결과는 바꾸지 않습니다.
+
+Ver2의 추가 신호가 전부 결합 ligand라는 가정과 core 신호/mg 불변 가정은 검증 대상입니다. 미결합 ligand, core 변화, OH/물/background도 추가 신호에 기여할 수 있습니다. 양의 추가 면적, 높은 R² 또는 pristine 자신을 뺀 0%만으로 grafting이 검증되지는 않습니다. bounds·위성 local residual·전처리 간격 불일치 등 검토 항목을 유지하면서 잠정 수치는 계속 표시합니다.
+
+## 0.10.6 C / H NMR 가져오기 수정
+
+- 이전에는 C NMR 탭의 `Import ASCII TXT…`에 복소수 H NMR 파일을 넣으면 `At least three numeric four-column data rows are required` 오류가 발생했습니다. 파일 손상이 아니라 서로 다른 가져오기 경로의 문제입니다. 0.10.5에서도 **ssNMR → H NMR → Import H NMR ASCII...**로 해당 파일을 가져올 수 있습니다.
+- 이제 **C / H 어느 탭의 가져오기 버튼을 눌러도** `LEFT / RIGHT / SIZE` 복소수 export, `ppm real imag` 표, 기존 4열 ASCII 형식을 구분하여 해당 탭에 추가하고 그 탭을 표시합니다. 파일명으로 C/H를 추측하지 않습니다. 서로 다른 형식의 파일을 함께 선택해도 각각 분리합니다.
+- 일부 파일에 문제가 있어도 정상 파일은 가져오며 오류 파일은 한 번에 안내합니다. 실제 데이터 수와 SIZE가 다른 경우에는 해당 오류를 그대로 보여줍니다.
+- 0.10.5의 위상/베이스라인 보정, 분해, 정량식, 저장 데이터와 그래프 설정은 유지합니다.
+
+**적용:** `LabPlotter_Any_to_0.10.6.labpatch`를 앱 패치 메뉴 또는 `apply_update.bat`로 적용하고 재시작합니다. 0.10.5에 바로 적용할 수 있으며 개인 라이브러리는 초기화하지 않습니다.
+
+## 0.10.5 aromatic 기준 coverage / 결과 복사
+
+- 계산 기본값은 사용자가 제시한 **aromatic 정규화 → pristine core의 aliphatic 차감**입니다. Quantitative analysis → Sample and core → `aromatic_reference`가 기본이며, 비교용 `mass` 방식도 선택할 수 있습니다. 전처리/분해 그래프의 intensity는 바꾸지 않고 정량 계산 단계에만 정규화를 적용합니다.
+- **표준 42565812.55 intensity×ppm = 1.861273386 μmol H**를 기본 가정으로 사용합니다. 입력창/라이브러리/CSV/계산 기록도 μmol로 통일했습니다. C6=13 H입니다. ANP 기본 질량은 38.38 mg, ANP-DMEN(+)는 55.18 mg으로 갱신했으며 나머지는 같습니다. 질량·표준량은 파라미터 라이브러리나 계산 확인창에서 바꿀 수 있습니다.
+- 기존 파일의 정확히 일치하는 **미검증 표준 기본값**은 새 μmol 해석으로 이동합니다. 사용자 지정/검증된 mmol 값은 물리량을 유지하도록 ×1000하여 μmol로 변환합니다. 이전 ANP 기본 질량과 정확히 일치할 때만 새 기본 질량을 적용하고 임의로 수정한 값은 유지합니다. 오래된 계산 기록은 재계산 전까지 새로운 결과로 간주하지 않습니다.
+- 하단 결과표의 **Value를 클릭한 뒤 드래그**하여 텍스트를 선택하고 Ctrl+C로 복사합니다. **Copy value / Copy results table**도 지원합니다. 전체 표는 탭 구분으로 복사되어 Excel에 붙여넣을 수 있습니다. 읽기 전용이므로 선택 중 원래 결과는 수정되지 않습니다.
+- 분해 오버레이의 **residual은 기본 끔**, **aliphatic/aromatic은 실선**입니다. Graph settings → H NMR decomposition에서 다시 켜거나 선 모양을 바꿀 수 있습니다. 이미 저장한 사용자 지정 스타일은 유지하며 해당 페이지의 기본값 복원으로 새 기본값을 적용합니다.
+- Y축 위의 `1e7` 대신 **Intensity (×10⁷ a.u.)**처럼 축 제목에 배율을 표시합니다. 원본 배열/적분/축 한계는 그대로이며 `plain` 또는 `scientific` 표시도 선택할 수 있습니다. 그래프 복사와 이미지 저장에도 같은 표기를 사용합니다.
+- **Model sensitivity... → Run model comparison**에서 동일한 보정 데이터에 Gaussian / Lorentzian / pseudo-Voigt / 미배정 overlap 모델을 비교합니다. 표와 원자료 감사 기록을 복사·저장할 수 있습니다. 현재 분해는 자동으로 바꾸지 않습니다. R² 개선이나 원하는 coverage만으로 모델을 선택하지 마세요. PH0 민감도는 기존 **Phase sensitivity...**에서 별도로 확인합니다.
+- ANP의 넓은 aliphatic 성분이 다른 피크의 꼬리를 흡수할 가능성을 보기 위해 중심/FWHM/G 비율을 결과표에 추가했습니다. 중심 간격에 비해 매우 넓은 aliphatic 성분에는 검토 메시지를 표시합니다. 이는 과대평가의 확정 판정이 아닙니다.
+
+위 변경은 현재 0.10.8 누적 패치에도 포함되어 있습니다. PDA/ANP pristine 기준과 수정 시료를 불러온 뒤 Quantitative analysis에서 `aromatic_reference`와 `1.861273386 umol H`를 확인하고 재계산하세요. 저장된 개별 계산값은 개별 확인창에서, 공통 기본값은 파라미터 라이브러리에서 수정합니다.
+
+## 이전 0.10.4의 잠정 coverage와 전체 시료 계산
+
+- **Withheld 대신 잠정 결과를 기본 표시**합니다. 입력/피팅이 계산 가능한 한 coverage, ligand umol, loading을 하단 표 맨 위에 보여줍니다. 음수·100% 초과 값도 그대로 유지합니다. 미확인 체크를 자동으로 승인하거나 값을 0~100%로 자르지 않습니다.
+- 0.10.4의 표준량은 mmol로 해석했지만 **현재 0.10.5의 제공 기본값은 위의 μmol 해석으로 대체**되었습니다. 시료·pristine 기준의 표준 대비 응답 배율은 각각 **1**로 시작하며 Quantitative analysis → Calibration에서 수정할 수 있습니다.
+- **Calculate all (provisional)... → Confirm and calculate all**: 로드된 시료마다 맞는 pristine PDA/ANP와 질량·리간드 프리셋을 확인한 뒤 일괄 계산합니다. 결과 CSV에는 단위·응답 배율·H 수·최대 loading·모든 파라미터·미해결 항목도 들어갑니다. 같은 pristine 시료·질량·응답의 self-reference는 0입니다. 이름을 통해 기준을 선택하지만 피팅 목적함수에 시료명이나 기대 순서는 넣지 않습니다.
+- 개별 **Quantitative analysis...**도 같은 방식입니다. **Calibration → Show provisional coverage despite unresolved checks**를 끄면 이전의 검토 완료 항목만 표시하는 모드입니다. 네 검증 체크는 실제 확인 전까지 미확인으로 유지하세요. 수치가 정의되지 않는 경우(표준 0, 질량/H 수 미입력, 기준 스펙트럼 없음)는 원인을 표시하며 만들어내지 않습니다. 기존 제공 10개 시료는 모두 계산에 필요한 기본 숫자가 있습니다. Lys는 이전처럼 MW만 있고 H 수·질량을 입력해야 합니다.
+- **Refine phase / baseline**: 큰 중앙 신호가 약한 위성 신호의 위상 오류를 가리지 않도록 검출된 ±1/±2 envelope의 국소 음수 에너지를 추가 고려합니다. 전역 PH0 ±5°, PH1 ±60° 이내에서 기존 해를 개선하는 후보만 검토하고 중앙 envelope 면적 변화 ±10%/음수 증가 조건을 확인합니다. 이는 개발한 경험적 보정안이며 DMfit/TopSpin의 알고리즘을 복제한 것이 아닙니다. 좌우 같은 높이, 개별 peak별 위상 회전, 절댓값 변환, 음수 잘라내기는 사용하지 않습니다.
+- 새 넓은 H NMR import는 위성 보정 검토를 기본 시도합니다. Preprocessing의 **Refine phase using resolved sidebands**로 끌 수 있습니다. 개선이 작거나 noise 수준의 약한 peak만 있으면 기존 PH0/PH1을 유지합니다. 각 후보·채택 여부는 **Phase / baseline QC → complete QC record**에 보존됩니다. 기존 라이브러리의 저장 위상은 유지되므로 원할 때 재보정 버튼을 사용하세요. 수동 위상 override는 자동으로 덮어쓰지 않습니다.
+- 함께 전처리한 그룹에서 재보정하면 현재 로드된 같은 그룹을 함께 갱신하고 오래된 분해/정량 결과를 지웁니다. 계산 후 **Save to library**로 수정한 조건을 저장하세요. 그래프 레이어/색/굵기, copy/export 및 C NMR/DLS 기능은 그대로 지원합니다.
+
+**패치 적용:** `LabPlotter_Any_to_0.10.4.labpatch`를 앱 패치 메뉴 또는 `apply_update.bat`로 적용하고 재시작합니다. 0.10.0~0.10.3에서 누적 적용할 수 있고 개인 라이브러리를 초기화하지 않습니다.
+
+현재 복소 ASCII만으로 보정 후보는 시험할 수 있습니다. 남는 음수 성분이 위상·baseline, pulse/dead-time, background 중 무엇 때문인지 분리하려면 원래 Bruker FID와 `acqus`/`procs`(pulse program, pulse length, delays, NS/RG, scaling 포함)가 도움이 됩니다. 수치 표시를 위해 이를 먼저 요구하지는 않습니다.
+
+근거: [Bruker phase/baseline correction 기술자료](https://www.bruker.com/pt/products-and-solutions/mr/nmr-software/topspin/_jcr_content/root/sections/more_information/sectionpar/linklist/contentpar-1/calltoaction.download-asset.pdf/links/item0/BS-100119_improving_phase_and_baseline_correction.pdf)는 동시 위상/기저선 개선과 solid-state/negative-peak 처리를 설명합니다. [Ravera 2021](https://doi.org/10.1016/j.jmro.2021.100022)은 넓은 paramagnetic 스펙트럼에서 finite pulse와 dead time에 의한 위상/기저선 왜곡 및 magnitude 처리의 정량 한계를 보여줍니다. 후자는 현재 시료의 원인 진단이 아니라 보정의 한계에 대한 참고입니다.
+
+## 0.10.3의 분해·그래프 기능
+
+- 새로 가져오는 넓은 H NMR의 **편집 가능한 랩 설정은 400.0 MHz / 20,000 Hz**, 따라서 sideband 간격은 **50 ppm**입니다. ASCII에서 읽은 장비 메타데이터가 아니며 실제 측정값이 다르면 바꿔야 합니다. 둘 다 0이면 기존 데이터 기반 간격 추정을 사용합니다. ppm 축 자체를 늘이거나 이동하지 않습니다.
+- 기존 라이브러리 항목: **Preprocessing → Get preprocessing condition → 400 MHz / 20 kHz preset → Apply**, 이어서 **Decompose spectrum → MAS sideband defaults → Fit and preview → Apply**. 사용자 지정 위상값과 이전 설정은 자동 삭제되지 않습니다. 위상을 다시 자동으로 찾으려면 Phase override에서 두 값을 비웁니다.
+- DMfit `ss band`처럼 각 sideband의 **폭과 G/L을 해당 중앙 peak에 연결**하는 것이 기본입니다. 각 family의 G fraction을 고정할 수 있으며 `0=Lorentzian, 1=Gaussian, 빈칸=최적화`입니다. 고정 G는 pseudo_voigt MAS 모델에서 사용합니다. 위상이나 예상 시료 순서를 이용해 강제로 적분값을 맞추지 않습니다.
+- **Component integrals...**에서 중앙/±1/±2 등의 면적, 중심, 폭, G 비율, 합계를 봅니다. Finite area는 실제 fit 범위 적분, Full-profile area는 무한 꼬리까지 외삽한 비교값입니다. 표준과의 단위·배율 일치가 확인되지 않으면 절대 적분값을 직접 비교하면 안 됩니다.
+- **Signed satellite heights**는 작은 음수 피팅을 살펴보는 진단 옵션입니다. 음수 면적을 양수나 0으로 숨기지 않으며, 음수 성분이 있으면 경고하며, 검토 완료 모드에서는 coverage를 보류합니다. 약한 peak를 좌우 복제하지 않습니다.
+- **Phase sensitivity...**는 선택한 시료와 pristine 기준에 PH0 ±2°(변경 가능)를 독립 적용하고 PH1을 고정한 채 baseline과 분해를 다시 계산합니다. 질량·응답 배율을 확인합니다. aliphatic/mg 및 신호 분율의 범위가 겹치면 순서가 위상에 민감한 것으로 표시합니다. 이 범위는 통계적 신뢰구간이 아닙니다. 현재 보정/분해/원본은 바꾸지 않습니다.
+- coverage 보류 문구를 짧게 표시해 **하단 적분 결과표가 가려지지 않도록** 수정했습니다. 전체 사유는 Calculation details에서 확인합니다. 중심/폭 경계, 강한 상관 또는 비슷한 잔차의 서로 다른 해가 있으면 모호한 분해를 별도로 표시합니다. 0.10.4 기본 모드에서는 잠정 수치도 표시합니다.
+
+400 MHz / 20 kHz와 측정 envelope 간격이 잘 맞지 않거나 외곽 satellite 잔차가 크면 실제 acquisition 조건, ppm 기준, 위상/baseline과 모델을 재확인해야 합니다. 높은 전체 R²나 기대한 PDA-C6 > PDA 순서만으로 올바른 분해를 증명하지 않습니다. DMfit 결과를 정확히 재현하려면 적분표뿐 아니라 peak별 중심·폭·G/L·고정 여부와 위상값이 필요합니다.
+
+## H NMR: MAS sideband 포함 분해·적분
 
 이번 satellite 모델은 **MAS spinning sideband**입니다. aliphatic/aromatic 각각의 피크 위치를 `delta_family + n × spacing`으로 연결합니다. 실제 측정의 MAS 속도(Hz)와 **1H** 주파수(MHz)를 모두 입력하면 `spacing(ppm) = Hz / MHz`로 고정합니다. 둘 다 0이면 데이터에서 추정·피팅하며, 측정 조건이 확인된 것으로 간주하지 않습니다. 13C 측정 조건을 H NMR에 자동 대입하지 않습니다.
 
@@ -11,18 +98,18 @@ FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer, Lab DLS 및 TEM TIFF 데이터를 플
 - baseline은 중심 4.5 ppm에서 기본 145 ppm 이상 떨어진 바깥 후보를 사용하고 주기적인 피크 영역을 제외합니다. 기본 robust linear이며 0~2차를 선택할 수 있습니다. 실제 신호가 앵커에 포함되면 제외 폭/거리/차수를 조절해야 합니다. 자동 보정은 검토할 제안입니다.
 - **Phase / baseline QC...**에서 원래 실수, 위상 보정 후, baseline 제거 후, 뺀 baseline을 비교합니다. 차수별 검출 상태·peak ppm·prominence/noise·음의 신호 비율을 표시합니다. **Main peak / Full sidebands**는 표시 범위만 바꾸며 재정규화하지 않습니다.
 - **Decompose spectrum... → MAS sideband defaults**는 새 모델의 시작값을 불러옵니다. 이전 라이브러리의 좁은 전처리는 **Preprocessing → Get preprocessing condition → Apply**로 다시 준비해야 넓은 fit이 가능합니다. 저장된 모델을 조용히 덮어쓰지 않습니다.
-- 중심·폭·Gaussian/Lorentzian 혼합률을 sideband에 연결하되 **좌우 높이는 독립 변수**입니다. 폭 배율 1 + `Fit common sideband-width multiplier` 끔은 DMfit ssb의 동일 폭 연결입니다. 기본 켬은 넓은 H NMR envelope를 위해 공통 폭 배율을 추가 피팅하는 경험적 확장입니다. CSA/dipolar 물리 시뮬레이션이나 DMfit 파일 호환 기능은 아닙니다.
-- 각 가족의 곡선/면적은 중심과 선택한 모든 차수의 합입니다. `중심 면적 × 5`로 대신하지 않습니다. 결과에 중심/sideband/총면적, CSV에 차수별 곡선, 계산 기록에 차수별 면적·위치·폭·검출 상태를 제공합니다. 적분은 유한 측정 범위 안의 겹치는 꼬리까지 포함하며 누락된 무한 꼬리를 외삽하지 않습니다.
+- 중심·폭·Gaussian/Lorentzian 혼합률을 sideband에 연결하되 **좌우 높이는 독립 변수**입니다. 폭 배율 1 + `Fit common sideband-width multiplier` 끔은 DMfit ssb의 동일 폭 연결입니다. 0.10.3 기본은 끔입니다. 켜면 공통 폭 배율을 추가 피팅하는 경험적 확장입니다. CSA/dipolar 물리 시뮬레이션이나 DMfit 파일 호환 기능은 아닙니다.
+- 각 가족의 곡선/면적은 중심과 선택한 모든 차수의 합입니다. `중심 면적 × 5`로 대신하지 않습니다. 결과에 중심/sideband/총면적, CSV에 차수별 곡선, 계산 기록에 차수별 면적·위치·폭·검출 상태를 제공합니다. 적분은 유한 측정 범위 안의 겹치는 꼬리까지 포함하며 정량에 누락된 무한 꼬리를 외삽하지 않습니다. 별도의 full-profile 면적 열은 DMfit 비교를 위한 무한 꼬리 외삽값입니다.
 - 약한 ±2차를 복제하거나 강제로 0으로 만들지 않습니다. **검출된 envelope**와 **모델로 추정한 성분**을 구분합니다. 기본 SNR 5 및 중앙 높이 대비 prominence 하한은 검출 진단 기준이며 화학적 배정의 증명은 아닙니다. 검출된 sideband의 RMSE/피크 높이 >25%처럼 전체 R²에 가려진 문제도 검사합니다.
-- 표준 `42565812.55 = 1.861273386 mmol H`는 **모든 sideband 포함**으로 기록하고 숫자/단위를 바꾸지 않습니다. 시료·표준의 포함 여부가 다르면 coverage를 보류합니다. 포함 차수·약한 피크·위상/baseline 검토란도 추가됩니다. 표준 단위/응답, 정량 측정, 성분 배정 검증은 여전히 필요합니다. 확인란이 측정이나 화학적 배정을 증명하지는 않습니다.
+- 표준 `42565812.55 = 1.861273386 mmol H`는 **모든 sideband 포함**으로 기록하고 숫자/단위를 바꾸지 않습니다. 시료·표준의 포함 여부가 다르면 경고하며, 검토 완료 모드에서 coverage를 보류합니다. 포함 차수·약한 피크·위상/baseline 검토란도 추가됩니다. 표준 단위/응답, 정량 측정, 성분 배정 검증은 여전히 필요합니다. 확인란이 측정이나 화학적 배정을 증명하지는 않습니다.
 
 공식 근거: [DMfit linked ssb](https://nmr.cemhti.cnrs-orleans.fr/Dmfit/Howto/1D_ssb.aspx), [DMfit models](https://nmr.cemhti.cnrs-orleans.fr/Dmfit/help/Models/Default.aspx), [CSA MAS tutorial](https://nmr.cemhti.cnrs-orleans.fr/dmfit/Howto/CSA/CSA_MAS.aspx), [위상/baseline·모델 불일치의 정량 영향](https://mr.copernicus.org/articles/1/141/2020/). 좌우 높이를 강제로 같게 만드는 대신 위치 간격·흡수형 모양·음의 로브·잔차를 함께 봅니다.
 
-**0.10.0 → 0.10.2 업데이트:** `LabPlotter_0.10.0_to_0.10.2.labpatch`를 앱의 패치 적용 메뉴 또는 `apply_update.bat`로 적용하고 재시작하세요. 0.10.1 별도 설치는 필요 없습니다. 원본 데이터/개인 라이브러리는 삭제하지 않습니다. `threadpoolctl` 의존성이 추가되어 패치 적용 중 Python 의존성 설치가 필요합니다. 적용 실패 시 updater의 rollback 기능을 사용할 수 있습니다.
+**현재 업데이트:** `LabPlotter_Any_to_0.10.8.labpatch`를 앱의 패치 적용 메뉴 또는 `apply_update.bat`로 적용하고 재시작하세요. 이전 0.10.x 버전에서 누적 적용할 수 있습니다. 개인 데이터/라이브러리는 유지하고 실패 시 updater rollback을 사용할 수 있습니다. 기존 라이브러리의 저장 조건은 자동으로 바꾸지 않으므로 아래 새 설정 적용 순서를 확인하세요.
 
 ### 공통 분해·정량 기능
 
-ssNMR 안의 **C NMR / H NMR**에서 선택합니다. 기존 C NMR 기능은 유지됩니다. 0.10.0 기본 계산은 분해 전 고정 영역을 직접 적분했습니다. 이 방식과 aromatic 신호로 core 양을 추정하던 정량 경로를 이번 버전에서 제거했습니다. 0.10.0의 약 10,000% 결과는 검증된 표면 coverage가 아닙니다.
+ssNMR 안의 **C NMR / H NMR**에서 선택합니다. 기존 C NMR 기능은 유지됩니다. 0.10.0 기본 계산은 분해 전 고정 영역을 직접 적분했습니다. 현재는 분해 성분의 전체 적분을 이용하고, 정량 단계에서 선택한 aromatic 정규화 또는 질량 기준 차감을 수행합니다. 0.10.0의 약 10,000% 결과는 검증된 표면 coverage가 아닙니다.
 
 1. **Import H NMR ASCII...**에서 `LEFT / RIGHT / SIZE` 헤더와 `실수+허수i` 값이 있는 TopSpin TXT/ASC 또는 `ppm real imag` 표를 가져옵니다. 원본 복소수는 유지합니다. 위상/베이스라인 체크박스와 **Phase override...**로 보정을 확인합니다.
 2. **Preprocessing...**에서 수정 시료와 대응하는 미변형 PDA/ANP를 함께 준비합니다. 첨부 파일은 위의 넓은 MAS 조건과 약 0.0381753723 ppm grid로 시작합니다. 좁은 파일의 기본값은 -40~50 ppm 안의 공통 범위·0차 위상·edge baseline입니다. 최대값/면적 normalization을 하지 않습니다. 정렬 및 broadening은 기본 끔입니다. 자동 위상과 baseline 후보가 올바른지 직접 확인해야 합니다.
@@ -36,19 +123,25 @@ ssNMR 안의 **C NMR / H NMR**에서 선택합니다. 기존 C NMR 기능은 유
 
 ### 정량식과 필요한 확인
 
-분해된 aliphatic에는 리간드뿐 아니라 PDA/ANP 고유의 수소도 포함됩니다. 다음 식은 **코어 기여가 입력한 질량과 비례한다는 모델** 아래의 ligand-equivalent 양입니다.
+분해된 aliphatic에는 리간드뿐 아니라 PDA/ANP 고유의 수소도 포함됩니다. 기본 `aromatic_reference`는 **core의 질량당 aromatic H가 변하지 않는다**는 가정입니다.
 
-- `alpha = 입력한 시료 내 core 질량 / 미변형 기준 시료 질량`
-- `Delta A = 분해 Aliph_sample × sample_response − alpha × 분해 Aliph_core × core_response`
-- `n_H (umol) = Delta A / A_standard(intensity·ppm) × standard_mmol_H × 1000`
-- `n_ligand (umol) = n_H / 해당 성분에 포함되는 리간드 1개당 H 수`
-- `coverage (%) = 100 × n_ligand / [입력한 분모 질량(mg) × 최대 loading(umol/mg)]`
+- `k = standard_umol_H / A_standard(intensity·ppm)`
+- `ali_s = A_ali,s × response_s × k / mass_s`, `aro_s = A_aro,s × response_s × k / mass_s`
+- `ali_c = A_ali,c × response_c × k / mass_c`, `aro_c = A_aro,c × response_c × k / mass_c`
+- `f = aro_c / aro_s`
+- `ΔH(μmol/mg) = ali_s × f − ali_c`
+- `loading(μmol/mg) = ΔH / H_per_ligand`
+- `coverage(%) = 100 × loading / maximum_loading(μmol/mg)`
 
-독립적으로 아는 core 질량이 없어서 비우면 전체 시료 질량을 사용하는 **근사**임을 명시합니다. aromatic 면적으로 입자 질량을 추측하지 않습니다. 리간드 질량이 커지거나 core 구조 자체가 변하면 이 근사가 맞지 않을 수 있습니다. H 수는 입자 질량 추정 인자가 아니라 수소 몰수에서 리간드 몰수로 바꾸는 화학량론입니다. C6=13, C18=37, DMEN=10, Arg=7은 비교환성 수소에 대한 출발값이며, 분해 성분이 이 수소를 실제로 대표하는지 확인해야 합니다. Lys는 분자량 146.19만 기본 제공하고 H 수·질량은 비웁니다. 같은 pristine 스펙트럼/질량/응답으로 blank 검증을 하면 차감량이 자연스럽게 0이 됩니다.
+이 계산의 loading은 pristine **reference-equivalent** 기준입니다. 수정 시료 질량은 coverage 식에서 약분되지만 pristine 기준 질량은 남습니다. `f`는 aromatic 정규화 배율이며 실측 질량비가 아닙니다. 절대 ligand-equivalent 양은 loading에 입력 시료 질량을 곱한 정규화된 값입니다. 그래프의 intensity와 원본 데이터는 정규화하지 않습니다.
 
-표준값 `42565812.55 area = 1.861273386 mmol H`, 주신 시료 질량, PDA `0.0693`, ANP `0.1619 umol/mg`는 변경하지 않았습니다. **이 표준의 면적 단위·처리 배율·시료와의 정량 응답은 파일만으로 알 수 없습니다.** 분해만으로 이 문제는 해결되지 않습니다. 표준 area가 ppm 적분인지, point sum인지(표준 자체의 원래 ppm step 필요), Hz 적분인지(MHz 필요), 표준량이 정말 mmol H인지 확인해야 합니다. 충분한 이완과 정량 pulse sequence, scan 수·receiver gain·TopSpin scale·충전 등의 응답 차이는 response multiplier로 반영합니다.
+선택 가능한 `mass` 방식에서는 `f=1`, `alpha = 시료 core 질량 / pristine 질량`으로 aliphatic 면적을 직접 차감합니다. core 질량이 빈칸이면 총 시료 질량을 근사 사용합니다. 해당 core 질량 입력은 `aromatic_reference`에서는 사용하지 않습니다.
 
-표준 단위/배율, 정량 측정 조건, 성분 배정/H 수/core 모델을 검토하는 세 확인란이 모두 확인되기 전에는 **절대 리간드 양과 coverage를 Withheld로 표시**합니다. 성분 면적과 신호 비율은 계속 제공합니다. 확인란 자체가 검량을 증명하지는 않습니다. fit R² < 0.98도 절대 정량을 보류합니다. 계산 검증 기록에는 확인되지 않은 대수식 결과를 별도 보관하여 오차 원인을 추적할 수 있습니다. 검토 후에도 음수/>100%라면 자르거나 0~100%로 강제 변환하지 않고 모델 불일치를 알립니다. 전달한 면적을 임의로 1000배 환산하지 않습니다.
+C6=13, C18=37, DMEN=10, Arg=7 H는 비교환성 H에 대한 출발값이며 분해 성분이 이 H를 실제로 대표하는지 확인해야 합니다. Lys는 MW 146.19만 기본 제공하고 H 수·질량은 비웁니다. 같은 pristine의 self-reference 0%는 자기 차감 결과이며 분해 정확도의 검증이 아닙니다.
+
+현재 표준 기본값은 **42565812.55 intensity×ppm = 1.861273386 μmol H**, 최대 loading은 PDA **0.0693**, ANP **0.1619 μmol/mg**입니다. 표준의 실제 면적 단위/처리 배율 및 시료와의 정량 응답은 파일만으로 확인되지 않으므로 잠정 가정으로 표시합니다. point sum이면 표준 자체의 원래 ppm step, Hz 적분이면 MHz를 입력합니다. 응답 배율은 별도 설정합니다.
+
+표준 단위/배율, 정량 측정 조건, 성분 배정/H 수/core 모델, sideband 검토의 네 확인란은 실제 확인 상태를 기록합니다. 0.10.5 기본 모드는 미확인 상태나 fit 품질 경고가 있어도 **잠정 리간드 양/coverage를 표시**하고 전체 사유를 Calculation details에 남깁니다. `Show provisional coverage`를 끄면 이전의 Withheld 모드입니다. 확인란 자체가 검량을 증명하지는 않습니다. 음수/>100% 결과를 자르거나 강제 변환하지 않고, 제공한 면적을 임의로 1000배 환산하지 않습니다.
 
 R²가 높아도 넓은 1H 신호의 분해가 유일하지는 않습니다. 특히 water/OH/NH, rotor 배경, sideband 및 core 구조 변화는 aliphatic/aromatic 가정과 겹칠 수 있습니다. 피크 중심/폭의 경계 도달, 파라미터 상관 및 초기값에 따른 면적 차이를 진단에 표시합니다. 별도 물리/화학적 근거 없이 모든 aliphatic을 공유결합 surface ligand로 해석하지 마세요. apparent coverage는 투입 리간드 대비 반응 수율과도 다릅니다.
 

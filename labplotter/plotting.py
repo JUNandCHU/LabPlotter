@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from matplotlib.figure import Figure
 from matplotlib import font_manager
-from matplotlib.ticker import MultipleLocator
+from matplotlib.ticker import MultipleLocator, FuncFormatter, ScalarFormatter
 from matplotlib.transforms import Bbox
 import math
 
@@ -196,6 +196,21 @@ def apply_origin_style(figure: Figure, axis, options: PlotOptions) -> None:
         left, right = axis.get_xlim()
         if left < right:
             axis.set_xlim(right, left)
+    # H NMR can move the scientific multiplier into the axis title. Only tick
+    # text changes: line data, integrals, limits and exported CSV stay untouched.
+    notation = getattr(axis, '_labplotter_y_notation', None)
+    if notation in ('axis_label', 'plain') and axis.get_yscale() == 'linear':
+        peak = max(abs(v) for v in axis.get_ylim())
+        exponent = int(math.floor(math.log10(peak))) if peak > 0 else 0
+        if notation == 'axis_label' and (exponent >= 4 or exponent <= -4):
+            factor = 10.**exponent
+            axis.yaxis.set_major_formatter(FuncFormatter(lambda value, pos: f'{value/factor:g}'))
+            unit = (rf'$\times 10^{{{exponent}}}$ '+options.y_unit).strip()
+            axis.set_ylabel(PlotOptions.axis_label(options.y_label, unit))
+        else:
+            formatter = ScalarFormatter(useOffset=False); formatter.set_scientific(False)
+            axis.yaxis.set_major_formatter(formatter)
+        axis.yaxis.get_offset_text().set_visible(False)
 
 
 def figure_export_bbox(figure: Figure):

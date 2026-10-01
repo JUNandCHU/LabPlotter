@@ -96,7 +96,7 @@ class HNMRTests(unittest.TestCase):
         settings=replace(common_settings([a,b]),phase=False,baseline=False)
         prepare_spectra([a,b],settings)
         q=QuantSettings(line_shape="gaussian", calibration_verified=True, acquisition_verified=True, assignments_verified=True, sample_mass_mg=10,reference_mass_mg=10,capacity_umol_mg=.2,
-                        standard_area=100,standard_mmol_h=.001,effective_h=2)
+                        standard_area=100,standard_umol_h=1.,effective_h=2)
         r=quantify(a,b,q)
         expected_area=40*.35*np.sqrt(2*np.pi)
         self.assertAlmostEqual(r.values['excess_aliphatic_area'],expected_area,places=5)
@@ -133,7 +133,7 @@ class HNMRTests(unittest.TestCase):
         self.assertTrue(any('NOT been clipped' in w for w in r.warnings))
         r2=quantify(a,b,replace(q,response_factor=2,reference_response_factor=2))
         self.assertAlmostEqual(r2.values['ligand_umol'],2*r.values['ligand_umol'])
-        self.assertIn('standard_mmol_H * 1000',r.audit)
+        self.assertIn('standard_H_umol / standard_area',r.audit)
         self.assertEqual(len(result_csv(r).splitlines()),len(r.sample_fit.x)+1)
 
     def test_gaussian_decomposition_has_recoverable_components_and_zero_blank(self):
@@ -148,7 +148,7 @@ class HNMRTests(unittest.TestCase):
         self.assertEqual(p['standards'][0]['area'],42565812.55)
         self.assertFalse(p['standards'][0]['verified'])
         q=quant_defaults(fixture('Hnmr_i_ANP_Plus_JM37B'),p)
-        self.assertEqual((q.core,q.ligand,q.sample_mass_mg,q.molecular_weight,q.effective_h),('ANP','DMEN(+)',18.27,88.15,10.))
+        self.assertEqual((q.core,q.ligand,q.sample_mass_mg,q.molecular_weight,q.effective_h),('ANP','DMEN(+)',55.18,88.15,10.))
         lys=quant_defaults(fixture('PDA-Lys'),p)
         self.assertIsNone(lys.effective_h);self.assertIsNone(lys.sample_mass_mg)
         self.assertEqual(lys.molecular_weight,146.19)

@@ -50,22 +50,25 @@ class HNMRLibrary(NMRLibrary):
 
 PARAMETER_FIELDS = {
     "standards": [("name", "Name", "text"), ("area", "Standard area", "positive"),
-                  ("mmol_h", "mmol H", "positive"), ("basis", "Area basis: ppm / point_sum / hz", "basis"),
+                  ("umol_h", "umol H", "positive"), ("basis", "Area basis: ppm / point_sum / hz", "basis"),
                   ("grid_step", "Standard original grid step (ppm)", "optional"),
                   ("frequency_mhz", "Spectrometer frequency (MHz)", "optional"),
                   ("verified", "Area basis and scale verified", "bool"),
                   ("includes_sidebands", "Area includes spinning sidebands", "bool")],
     "cores": [("name", "Core name", "text"), ("capacity", "Maximum loading (umol/mg)", "positive")],
     "ligands": [("name", "Ligand name", "text"), ("mw", "Parent molecular weight (g/mol)", "positive"),
-                ("effective_h", "H atoms represented per ligand (blank allowed)", "optional")],
+                ("effective_h", "H atoms represented per ligand (blank allowed)", "optional"),
+                ('schiff_h', 'Schiff H override (blank = automatic)', 'optional'),
+                ('michael_h', 'Michael H override (blank = automatic)', 'optional')],
     "samples": [("name", "Sample identity", "text"), ("mass_mg", "Entered mass (mg)", "positive")],
 }
 
 
 def validate_parameters(document):
-    if not isinstance(document, dict) or document.get("format") != "LabPlotter H NMR parameters" or document.get("version") != 1:
+    if not isinstance(document, dict) or document.get("format") != "LabPlotter H NMR parameters" or document.get("version") not in (1, 2):
         raise ValueError("Not a supported H NMR parameter library.")
     document = deepcopy(document)
+    legacy = document['version'] == 1
     for section, fields in PARAMETER_FIELDS.items():
         rows = document.get(section)
         if not isinstance(rows, list) or not rows or len(rows) > 1000:
@@ -74,10 +77,24 @@ def validate_parameters(document):
         for row in rows:
             if not isinstance(row, dict):
                 raise ValueError("Invalid parameter entry.")
+            if section == 'ligands':
+                row.setdefault('schiff_h',None); row.setdefault('michael_h',None)
+            if section == 'standards' and legacy and 'umol_h' not in row:
+                amount = row.get('mmol_h')
+                supplied = (row.get('name') == 'Supplied internal standard' and row.get('area') == 42565812.55
+                            and amount == 1.861273386 and not row.get('verified', False))
+                if isinstance(amount, (int, float)) and not isinstance(amount, bool):
+                    row['umol_h'] = amount if supplied else amount*1000
+                row.pop('mmol_h', None)
+            if section == 'samples' and legacy:
+                updates = {'ANP': (19.25, 38.38), 'ANP-DMEN(+)': (18.27, 55.18)}
+                if row.get('name') in updates:
+                    old, new = updates[row['name']]
+                    if row.get('mass_mg') == old: row['mass_mg'] = new
             if section == 'standards' and 'includes_sidebands' not in row:
                 # Only the exact supplied standard has this user-confirmed scope.
                 row['includes_sidebands'] = (row.get('name') == 'Supplied internal standard' and
-                    row.get('area') == 42565812.55 and row.get('mmol_h') == 1.861273386)
+                    row.get('area') == 42565812.55 and row.get('umol_h') == 1.861273386)
             for key, label, kind in fields:
                 v = row.get(key)
                 if kind == "text" and (not isinstance(v, str) or not v.strip()):
@@ -92,6 +109,10 @@ def validate_parameters(document):
             if row["name"] in names:
                 raise ValueError("Parameter names must be unique within each category.")
             names.add(row["name"])
+    if legacy:
+        document['version'] = 2
+        document['migration_note'] = ('0.10.5: unverified supplied standard default now means 1.861273386 umol H. '
+            'Other mmol amounts were converted to umol. Unchanged ANP / ANP-DMEN mass defaults are 38.38 / 55.18 mg; custom masses retained.')
     return deepcopy(document)
 
 
