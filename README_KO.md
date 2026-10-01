@@ -1,6 +1,70 @@
-# LabPlotter 0.9.1
+# LabPlotter 0.10.2
 
 FTIR, NanoDrop UV–Vis, ssNMR, ZetaSizer, Lab DLS 및 TEM TIFF 데이터를 플롯하고 비교·분석하는 Windows 데스크톱 및 웹 앱입니다. 데스크톱의 측정 파일과 particle library는 외부 서버로 전송되지 않습니다.
+
+## 0.10.2 H NMR: MAS sideband 포함 분해·적분
+
+이번 satellite 모델은 **MAS spinning sideband**입니다. aliphatic/aromatic 각각의 피크 위치를 `delta_family + n × spacing`으로 연결합니다. 실제 측정의 MAS 속도(Hz)와 **1H** 주파수(MHz)를 모두 입력하면 `spacing(ppm) = Hz / MHz`로 고정합니다. 둘 다 0이면 데이터에서 추정·피팅하며, 측정 조건이 확인된 것으로 간주하지 않습니다. 13C 측정 조건을 H NMR에 자동 대입하지 않습니다.
+
+- 넓은 MAS 데이터는 기본 **-200~210 ppm 안의 측정된 공통 범위**에서 전처리합니다. 분해/적분은 **-145~155 ppm**, **±1·±2차**부터 시작하며 최대 ±4차까지 선택할 수 있습니다. 차수를 늘리면 전처리/fit 범위도 늘려야 합니다. 좁은 데이터와 이전 저장 설정은 유지합니다.
+- 제한된 자동 **PH0/PH1**을 사용합니다. PH1이 탐색 상한 근처에 도달하면 0차 보정으로 돌아가고 경고합니다. **Phase override...**의 PH0/PH1과 기준 pivot/span은 저장되므로 전처리 범위 변경 후에도 같은 위상 기울기를 유지합니다. PH1은 현재 전처리 폭 전체에 걸친 각도이며 장비의 PHC1과 그대로 동일한 숫자라고 가정하면 안 됩니다.
+- baseline은 중심 4.5 ppm에서 기본 145 ppm 이상 떨어진 바깥 후보를 사용하고 주기적인 피크 영역을 제외합니다. 기본 robust linear이며 0~2차를 선택할 수 있습니다. 실제 신호가 앵커에 포함되면 제외 폭/거리/차수를 조절해야 합니다. 자동 보정은 검토할 제안입니다.
+- **Phase / baseline QC...**에서 원래 실수, 위상 보정 후, baseline 제거 후, 뺀 baseline을 비교합니다. 차수별 검출 상태·peak ppm·prominence/noise·음의 신호 비율을 표시합니다. **Main peak / Full sidebands**는 표시 범위만 바꾸며 재정규화하지 않습니다.
+- **Decompose spectrum... → MAS sideband defaults**는 새 모델의 시작값을 불러옵니다. 이전 라이브러리의 좁은 전처리는 **Preprocessing → Get preprocessing condition → Apply**로 다시 준비해야 넓은 fit이 가능합니다. 저장된 모델을 조용히 덮어쓰지 않습니다.
+- 중심·폭·Gaussian/Lorentzian 혼합률을 sideband에 연결하되 **좌우 높이는 독립 변수**입니다. 폭 배율 1 + `Fit common sideband-width multiplier` 끔은 DMfit ssb의 동일 폭 연결입니다. 기본 켬은 넓은 H NMR envelope를 위해 공통 폭 배율을 추가 피팅하는 경험적 확장입니다. CSA/dipolar 물리 시뮬레이션이나 DMfit 파일 호환 기능은 아닙니다.
+- 각 가족의 곡선/면적은 중심과 선택한 모든 차수의 합입니다. `중심 면적 × 5`로 대신하지 않습니다. 결과에 중심/sideband/총면적, CSV에 차수별 곡선, 계산 기록에 차수별 면적·위치·폭·검출 상태를 제공합니다. 적분은 유한 측정 범위 안의 겹치는 꼬리까지 포함하며 누락된 무한 꼬리를 외삽하지 않습니다.
+- 약한 ±2차를 복제하거나 강제로 0으로 만들지 않습니다. **검출된 envelope**와 **모델로 추정한 성분**을 구분합니다. 기본 SNR 5 및 중앙 높이 대비 prominence 하한은 검출 진단 기준이며 화학적 배정의 증명은 아닙니다. 검출된 sideband의 RMSE/피크 높이 >25%처럼 전체 R²에 가려진 문제도 검사합니다.
+- 표준 `42565812.55 = 1.861273386 mmol H`는 **모든 sideband 포함**으로 기록하고 숫자/단위를 바꾸지 않습니다. 시료·표준의 포함 여부가 다르면 coverage를 보류합니다. 포함 차수·약한 피크·위상/baseline 검토란도 추가됩니다. 표준 단위/응답, 정량 측정, 성분 배정 검증은 여전히 필요합니다. 확인란이 측정이나 화학적 배정을 증명하지는 않습니다.
+
+공식 근거: [DMfit linked ssb](https://nmr.cemhti.cnrs-orleans.fr/Dmfit/Howto/1D_ssb.aspx), [DMfit models](https://nmr.cemhti.cnrs-orleans.fr/Dmfit/help/Models/Default.aspx), [CSA MAS tutorial](https://nmr.cemhti.cnrs-orleans.fr/dmfit/Howto/CSA/CSA_MAS.aspx), [위상/baseline·모델 불일치의 정량 영향](https://mr.copernicus.org/articles/1/141/2020/). 좌우 높이를 강제로 같게 만드는 대신 위치 간격·흡수형 모양·음의 로브·잔차를 함께 봅니다.
+
+**0.10.0 → 0.10.2 업데이트:** `LabPlotter_0.10.0_to_0.10.2.labpatch`를 앱의 패치 적용 메뉴 또는 `apply_update.bat`로 적용하고 재시작하세요. 0.10.1 별도 설치는 필요 없습니다. 원본 데이터/개인 라이브러리는 삭제하지 않습니다. `threadpoolctl` 의존성이 추가되어 패치 적용 중 Python 의존성 설치가 필요합니다. 적용 실패 시 updater의 rollback 기능을 사용할 수 있습니다.
+
+### 공통 분해·정량 기능
+
+ssNMR 안의 **C NMR / H NMR**에서 선택합니다. 기존 C NMR 기능은 유지됩니다. 0.10.0 기본 계산은 분해 전 고정 영역을 직접 적분했습니다. 이 방식과 aromatic 신호로 core 양을 추정하던 정량 경로를 이번 버전에서 제거했습니다. 0.10.0의 약 10,000% 결과는 검증된 표면 coverage가 아닙니다.
+
+1. **Import H NMR ASCII...**에서 `LEFT / RIGHT / SIZE` 헤더와 `실수+허수i` 값이 있는 TopSpin TXT/ASC 또는 `ppm real imag` 표를 가져옵니다. 원본 복소수는 유지합니다. 위상/베이스라인 체크박스와 **Phase override...**로 보정을 확인합니다.
+2. **Preprocessing...**에서 수정 시료와 대응하는 미변형 PDA/ANP를 함께 준비합니다. 첨부 파일은 위의 넓은 MAS 조건과 약 0.0381753723 ppm grid로 시작합니다. 좁은 파일의 기본값은 -40~50 ppm 안의 공통 범위·0차 위상·edge baseline입니다. 최대값/면적 normalization을 하지 않습니다. 정렬 및 broadening은 기본 끔입니다. 자동 위상과 baseline 후보가 올바른지 직접 확인해야 합니다.
+3. **Decompose spectrum... → Fit and preview**로 실제 분해를 수행합니다. 원본(보정된 실수 스펙트럼), aliphatic 성분, aromatic 성분, 합산 fit, 잔차(data − fit)를 비교합니다. **Apply decomposition to spectrum**으로 메인 그래프에 적용합니다. 변경한 조건은 다시 피팅해야 적용됩니다.
+4. 분해 기본 모델은 **pseudo-Voigt**(동일 중심·FWHM의 Gaussian/Lorentzian 혼합)이며 Gaussian, Lorentzian으로 바꿀 수 있습니다. 초기 **피크 중심 제약**은 aliphatic 0~4.5 ppm, aromatic 5.5~9 ppm입니다. 이는 주신 넓은 스펙트럼을 분해하기 위한 조정 가능한 가정으로, 해당 범위만 잘라 적분한다는 의미가 아닙니다. 예시 스크린샷의 9 ppm 피크 위치를 가져온 것이 아닙니다.
+5. **fit/성분 적분 범위**는 MAS 모드에서 -145~155 ppm, 중앙 피크 모드에서 -20~25 ppm입니다. 이 전체 범위 안에서 각 분해 성분의 겹치는 꼬리까지 **해석적으로 적분**합니다. 측정되지 않은 범위로 외삽하지 않습니다. 전처리 범위를 줄였다면 fit 범위도 조절해야 합니다. 피크 중심/FWHM 범위와 모델은 변경할 수 있고, 두 중심 범위 사이에 **unassigned overlap** 성분을 추가할 수 있습니다. 이 성분은 리간드 면적에서 제외합니다.
+6. **Quantitative analysis...**에서 pristine 기준, core/리간드/질량/검량계수와 분해 조건을 확인한 뒤 계산합니다. 시료와 기준은 같은 분해 모델을 사용합니다. 공통 전처리 체크가 켜졌으면 동일 준비 그룹이어야 하며, 꺼졌으면 현재 시료의 보정 토글을 반영한 공통 기본 조건으로 둘 다 다시 처리합니다.
+7. 그래프 아래에 분해 성분별 적분, aliphatic/aromatic 비, aliphatic 수소 신호 분율, fit R²/RMSE 및 정량 결과를 표시합니다. **신호 분율은 surface coverage가 아닙니다.** 단순 ppm-window 적분도 진단 항목으로만 제공하며 정량에는 쓰지 않습니다. **Calculation details... / Export processed CSV...**에서 모든 입력값, 공식, 피팅 중심·폭·혼합률, 면적 범위, 기준 스펙트럼 fit, 잔차를 검증할 수 있습니다.
+8. **Show decomposition**으로 분해 주석을 끄고 켭니다. **그래프 설정 → Curve colors**에서 개별 색상을, **H NMR decomposition**에서 개별 선 굵기·모양·표시 여부·면적 음영을 조절합니다. 굵기를 비우면 공통 굵기를 따릅니다. 클립보드와 PNG/SVG/PDF는 현재 보이는 분해 주석을 포함합니다. 그래프 비율·범례 등 공통 기능도 유지합니다.
+9. **Save to library**는 원본/보정/분해 조건과 피팅 기록, 색상·스타일을 함께 저장합니다. 저장된 분해는 처리 데이터 해시가 일치할 때만 다시 표시합니다. phase/baseline/grid 변경 시 오래된 분해/정량을 지웁니다. 라이브러리는 불러오기·순서 변경·이름 변경·삭제·JSON 이동을 지원합니다. 표의 행 높이는 글꼴 높이+여백을 사용합니다.
+
+### 정량식과 필요한 확인
+
+분해된 aliphatic에는 리간드뿐 아니라 PDA/ANP 고유의 수소도 포함됩니다. 다음 식은 **코어 기여가 입력한 질량과 비례한다는 모델** 아래의 ligand-equivalent 양입니다.
+
+- `alpha = 입력한 시료 내 core 질량 / 미변형 기준 시료 질량`
+- `Delta A = 분해 Aliph_sample × sample_response − alpha × 분해 Aliph_core × core_response`
+- `n_H (umol) = Delta A / A_standard(intensity·ppm) × standard_mmol_H × 1000`
+- `n_ligand (umol) = n_H / 해당 성분에 포함되는 리간드 1개당 H 수`
+- `coverage (%) = 100 × n_ligand / [입력한 분모 질량(mg) × 최대 loading(umol/mg)]`
+
+독립적으로 아는 core 질량이 없어서 비우면 전체 시료 질량을 사용하는 **근사**임을 명시합니다. aromatic 면적으로 입자 질량을 추측하지 않습니다. 리간드 질량이 커지거나 core 구조 자체가 변하면 이 근사가 맞지 않을 수 있습니다. H 수는 입자 질량 추정 인자가 아니라 수소 몰수에서 리간드 몰수로 바꾸는 화학량론입니다. C6=13, C18=37, DMEN=10, Arg=7은 비교환성 수소에 대한 출발값이며, 분해 성분이 이 수소를 실제로 대표하는지 확인해야 합니다. Lys는 분자량 146.19만 기본 제공하고 H 수·질량은 비웁니다. 같은 pristine 스펙트럼/질량/응답으로 blank 검증을 하면 차감량이 자연스럽게 0이 됩니다.
+
+표준값 `42565812.55 area = 1.861273386 mmol H`, 주신 시료 질량, PDA `0.0693`, ANP `0.1619 umol/mg`는 변경하지 않았습니다. **이 표준의 면적 단위·처리 배율·시료와의 정량 응답은 파일만으로 알 수 없습니다.** 분해만으로 이 문제는 해결되지 않습니다. 표준 area가 ppm 적분인지, point sum인지(표준 자체의 원래 ppm step 필요), Hz 적분인지(MHz 필요), 표준량이 정말 mmol H인지 확인해야 합니다. 충분한 이완과 정량 pulse sequence, scan 수·receiver gain·TopSpin scale·충전 등의 응답 차이는 response multiplier로 반영합니다.
+
+표준 단위/배율, 정량 측정 조건, 성분 배정/H 수/core 모델을 검토하는 세 확인란이 모두 확인되기 전에는 **절대 리간드 양과 coverage를 Withheld로 표시**합니다. 성분 면적과 신호 비율은 계속 제공합니다. 확인란 자체가 검량을 증명하지는 않습니다. fit R² < 0.98도 절대 정량을 보류합니다. 계산 검증 기록에는 확인되지 않은 대수식 결과를 별도 보관하여 오차 원인을 추적할 수 있습니다. 검토 후에도 음수/>100%라면 자르거나 0~100%로 강제 변환하지 않고 모델 불일치를 알립니다. 전달한 면적을 임의로 1000배 환산하지 않습니다.
+
+R²가 높아도 넓은 1H 신호의 분해가 유일하지는 않습니다. 특히 water/OH/NH, rotor 배경, sideband 및 core 구조 변화는 aliphatic/aromatic 가정과 겹칠 수 있습니다. 피크 중심/폭의 경계 도달, 파라미터 상관 및 초기값에 따른 면적 차이를 진단에 표시합니다. 별도 물리/화학적 근거 없이 모든 aliphatic을 공유결합 surface ligand로 해석하지 마세요. apparent coverage는 투입 리간드 대비 반응 수율과도 다릅니다.
+
+웹도 동일 엔진의 분해·그래프·정량을 제공합니다. 웹 라이브러리는 세션 단위여서 JSON 내보내기/다시 가져오기가 필요하고, 데스크톱은 영구 로컬 저장입니다. 0.10.0에 저장된 분석 조건은 새 분해 방식과 질량 기준 방식으로 옮기되 검증 체크를 초기화합니다. 기존 C NMR/DLS 데이터베이스는 초기화하지 않습니다.
+
+방법 참고: [BIPM qNMR](https://www.bipm.org/en/organic-analysis/qnmr), [DMfit](https://nmr.cemhti.cnrs-orleans.fr/dmfit/), [nmrglue autophase](https://nmrglue.readthedocs.io/en/latest/reference/proc_autophase.html). LabPlotter는 자체 SciPy 기반 ACME 스타일 위상 및 제한 최소제곱 피팅을 사용하며, DMfit/nmrglue 구현을 그대로 사용하는 것은 아닙니다. 용액 dopamine의 aromatic/alkyl 위치는 [Mayadevi et al., ACS Omega 2022](https://pmc.ncbi.nlm.nih.gov/articles/PMC9026075/)의 참고이며, 고체 PDA의 고정 피크 배정으로 사용하지 않습니다.
+
+## 0.9.2 곡선별 색상 설정
+
+- 모든 탭에서 **그래프 설정 → 곡선별 색상**을 열어 각 데이터 이름 옆의 **선택…** 버튼으로 RGB 색상을 지정하거나 HEX 코드를 입력할 수 있습니다.
+- **기본값**은 해당 곡선만, **기본 곡선 색상 복원**은 현재 표시 중인 곡선들을 원래 색상으로 돌립니다. **이 탭 기본값 복원**은 숨긴 곡선을 포함한 그래프 설정을 초기화합니다.
+- 실시간 미리보기를 켜면 즉시 반영되며, 끈 상태에서는 **적용**을 누릅니다. 잘못된 색상 입력이나 색상 선택 취소는 기존 그래프를 바꾸지 않습니다.
+- 현재 작업의 데이터 숨김·이름 변경·순서 변경, Lab DLS 평균/개별 측정 전환, ssNMR 영역 재처리 후에도 사용자가 지정한 색을 유지합니다. Lab DLS 색상은 기존과 같이 설정에 저장됩니다.
+- 범례, mean R 라벨·점선, TEM 중앙값 선, FTIR 피크 라벨, ZetaSizer SD 음영이 곡선 색상을 따릅니다. 주석에 별도 색상을 지정했다면 그 설정을 유지합니다. 복사·PNG·SVG·PDF 저장에도 동일하게 반영됩니다.
+- ZetaSizer의 **입자별 기본 색상**은 그룹의 기본값이며, **곡선별 색상**에서 평균·각 반복 측정·막대를 개별 지정할 수 있습니다. 개별 지정한 색상이 그룹 기본값보다 우선합니다.
+- 웹 버전에서도 모든 분석 탭에 색상 선택과 기본값 복원을 지원합니다.
 
 ## 0.8.1 웹 버전
 

@@ -6,6 +6,7 @@ import streamlit as st
 from labplotter.lab_dls import AVERAGING_NOTE, STATISTICS_NOTE, parse_dls_text, statistics_rows, statistics_csv
 from labplotter.lab_dls_library import export_dls_library, import_dls_library
 from labplotter.lab_dls_plot import DLSStyle, dls_figure, plot_series
+from color_controls import series_colors
 
 
 def merge(target, particles):
@@ -91,10 +92,8 @@ def render_plot(t, particles, key, overlay, all_measurements, show_figure, plot_
         st.error(t('Logarithmic radius axis') + ': min/max > 0'); return
     if options.x_min is not None and options.x_max is not None and options.x_min >= options.x_max:
         st.error('X minimum must be less than X maximum.'); return
-    colors = {}
-    with st.expander(t('Series colors')):
-        for uid, label, _, color, _ in curves:
-            colors[uid] = st.color_picker(label, color, key=key+'-color-'+uid)
+    colors = series_colors(t, [(uid, label) for uid, label, *_ in curves], key,
+                           {uid: color for uid, _, _, color, _ in curves})
     figure = dls_figure(curves, options, style, positions, colors)
     if style.show_labels and curves:
         with st.expander(t('Label positions (graph fractions)')):

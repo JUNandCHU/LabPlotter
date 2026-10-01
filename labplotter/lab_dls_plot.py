@@ -8,6 +8,7 @@ from matplotlib.ticker import LogLocator, FuncFormatter
 import numpy as np
 
 from .lab_dls import distribution_statistics, representative_curve
+from .curve_colors import curve_color
 from .plotting import PlotOptions, SERIES_PALETTE, apply_origin_style, font_family_for_text
 
 
@@ -54,8 +55,9 @@ def plot_series(particles, overlay=False, all_measurements=False, average=False)
     return curves, errors
 
 
-def draw_dls(axis, options, curves, style, positions=None, colors=None):
-    positions, colors = positions or {}, colors or {}
+def draw_dls(axis, options, curves, style, positions=None, colors=None, colors_changed=None):
+    positions = positions or {}
+    colors = colors if colors is not None else {}
     if style.log_x and any(v is not None and (not np.isfinite(v) or v <= 0) for v in (options.x_min, options.x_max)):
         raise ValueError("Logarithmic radius bounds must be finite and positive.")
     if options.x_min is not None and options.x_max is not None and options.x_min >= options.x_max:
@@ -73,7 +75,7 @@ def draw_dls(axis, options, curves, style, positions=None, colors=None):
                   options.y_max if options.y_max is not None else max([20, *[float(c[2].intensity.max()) * 1.1 for c in curves]]))
     labels = {}
     for index, (key, label, m, default_color, line_style) in enumerate(curves):
-        color = colors.get(key, default_color)
+        color = curve_color(axis, key, label, default_color, colors, changed=colors_changed)
         axis.plot(m.radius, m.intensity, color=color, linewidth=options.line_width, linestyle=line_style, label=label)
         mean = distribution_statistics(m)["mean_radius"]
         if mean is None:

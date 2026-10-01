@@ -1,5 +1,13 @@
 """Shared desktop/web graph-control translations."""
 KO = {
+    'Curve colors': '곡선별 색상',
+    '+ {count} more · see Curve colors': '+ {count}개 더 · 곡선별 색상에서 확인',
+    'Particle color defaults': '입자별 기본 색상',
+    'Default': '기본값',
+    'Restore default curve colors': '기본 곡선 색상 복원',
+    'Choose a color for each curve. Related labels and bands follow the curve color.': '각 곡선의 색상을 선택하세요. 연결된 라벨과 음영도 곡선 색상을 따릅니다.',
+    'Plot data to edit its curve colors.': '데이터를 그래프에 표시하면 곡선별 색상을 변경할 수 있습니다.',
+    'Enter a valid color, for example #C00000, or use Choose….': '#C00000처럼 올바른 색상을 입력하거나 선택 버튼을 사용하세요.',
     'Graph ratio': '그래프 비율',
     'Fix graph width : height': '그래프 가로 : 세로 비율 고정',
     'Width': '가로',

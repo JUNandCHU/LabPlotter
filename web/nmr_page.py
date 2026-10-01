@@ -10,6 +10,7 @@ from labplotter.nmr_comparison import ComparisonSession
 from labplotter.nmr_library import export_portable_library, import_portable_library
 from labplotter.plotting import PlotOptions
 from labplotter.web import parse_uploaded_payload, spectra_figure
+from color_controls import series_colors
 
 
 def _fmt(v):
@@ -175,7 +176,11 @@ def comparison_panel(t, show_figure, ratio_controls=None):
         with st.expander(t('Plot settings')):
             ratio = ratio_controls('nmr-comparison')
     options=PlotOptions('Chemical shift','ppm','Intensity','a.u.' if r.settings.normalization=='None' else 'normalized a.u.',reverse_x=True,x_min=low,x_max=high,figure_ratio=ratio)
-    show_figure(spectra_figure([Spectrum(r.names[0],r.x,r.a),Spectrum(r.names[1],r.x,r.b)], options), 'ssNMR_comparison')
+    raw = (session.a_raw, session.b_raw)
+    spectra = [Spectrum(name, r.x, values, uid=source.uid)
+               for source, name, values in zip(raw, r.names, (r.a, r.b))]
+    colors = series_colors(t, [(s.uid, s.name) for s in spectra], 'nmr-comparison')
+    show_figure(spectra_figure(spectra, options, colors=colors), 'ssNMR_comparison')
     # Result elements follow the figure in the page layout; never annotate axes.
     st.markdown('**'+t('Comparison results')+'**')
     cols=st.columns(4)
@@ -258,7 +263,9 @@ def render_nmr_page(t, show_figure, ratio_controls=None):
             if ratio_controls is not None:
                 with st.expander(t('Plot settings')):
                     ratio = ratio_controls('nmr-raw')
-            show_figure(spectra_figure([next(s for s in spectra if s.uid==uid)],PlotOptions('Chemical shift','ppm','Intensity','a.u.',reverse_x=True,figure_ratio=ratio)), 'ssNMR_raw')
+            selected = next(s for s in spectra if s.uid==uid)
+            colors = series_colors(t, [(selected.uid, selected.name)], 'nmr-raw')
+            show_figure(spectra_figure([selected],PlotOptions('Chemical shift','ppm','Intensity','a.u.',reverse_x=True,figure_ratio=ratio), colors=colors), 'ssNMR_raw')
         else:
             st.info(t('Import TopSpin ASCII TXT data'))
     comparison_panel(t,show_figure,ratio_controls)

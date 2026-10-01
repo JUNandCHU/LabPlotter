@@ -5,6 +5,7 @@ from tkinter import colorchooser, font as tkfont, messagebox, ttk
 
 from .i18n import canonical, localize_widget_tree, manager as language_manager, tr
 from .plotting import validate_figure_ratio
+from .curve_color_editor import CurveColorEditor
 
 
 FONT_FAMILIES = (
@@ -25,9 +26,12 @@ class ScrollableSettingsFrame(ttk.Frame):
         background = ttk.Style(self).lookup("TFrame", "background") or "#F0F0F0"
         self.canvas = tk.Canvas(self, highlightthickness=0, background=background)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-        self.canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        horizontal = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=scrollbar.set, xscrollcommand=horizontal.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        self.rowconfigure(0, weight=1); self.columnconfigure(0, weight=1)
         self.content = ttk.Frame(self.canvas, padding=10)
         self._window = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
         self.content.bind("<Configure>", self._content_changed)
@@ -36,10 +40,11 @@ class ScrollableSettingsFrame(ttk.Frame):
         self.canvas.bind("<Leave>", lambda _event: self.canvas.unbind_all("<MouseWheel>"))
 
     def _content_changed(self, _event=None):
+        self.canvas.itemconfigure(self._window, width=max(self.canvas.winfo_width(), self.content.winfo_reqwidth()))
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _canvas_changed(self, event):
-        self.canvas.itemconfigure(self._window, width=event.width)
+        self.canvas.itemconfigure(self._window, width=max(event.width, self.content.winfo_reqwidth()))
 
     def _wheel(self, event):
         self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
@@ -73,12 +78,15 @@ class PlotSettingsWindow(tk.Toplevel):
         axes = ttk.Frame(notebook, padding=10)
         fonts = ttk.Frame(notebook, padding=10)
         ratio = ttk.Frame(notebook, padding=10)
+        curves = ScrollableSettingsFrame(notebook)
         notebook.add(axes, text=tr("Axes and lines"))
+        notebook.add(curves, text=tr("Curve colors"))
         notebook.add(fonts, text=tr("Fonts and colors"))
         notebook.add(ratio, text=tr("Graph ratio"))
         self._build_axes(axes)
         self._build_fonts(fonts)
         self._build_ratio(ratio)
+        self.curve_editor = CurveColorEditor(self, curves.content)
         self.extension = getattr(self.pane, "settings_extension", None)
         if self.extension is not None:
             extra = ScrollableSettingsFrame(notebook)
@@ -272,6 +280,8 @@ class PlotSettingsWindow(tk.Toplevel):
             self._extension_applying = False
 
     def apply(self):
+        if not self.curve_editor.apply():
+            return
         if self.pane.vars['fixed_ratio'].get():
             try:
                 validate_figure_ratio(self.pane.vars['ratio_width'].get(), self.pane.vars['ratio_height'].get())
@@ -296,6 +306,7 @@ class PlotSettingsWindow(tk.Toplevel):
         live = self.live.get()
         self.live.set(False)
         try:
+            self.curve_editor.discard()
             self.pane.restore_defaults()
             if self.extension is not None:
                 self.extension.restore_defaults()

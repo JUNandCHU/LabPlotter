@@ -571,6 +571,8 @@ from .plot_labels import KO as PLOT_KO
 KO.update(PLOT_KO)
 from .lab_dls_labels import KO as LAB_DLS_KO
 KO.update(LAB_DLS_KO)
+from .hnmr_labels import KO as HNMR_KO
+KO.update(HNMR_KO)
 
 def _translated(source: str, language: str) -> str:
     return KO.get(source, source) if language == "ko" else source

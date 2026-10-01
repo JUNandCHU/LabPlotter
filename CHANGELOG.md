@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.10.2 — 2026-09-30
+
+- Add empirical MAS sideband families to H NMR decomposition: linked spacing/shape, independent +/- amplitudes, optional common satellite-width multiplier, central/sideband/total integrals and per-order CSV/audit records. No peak-count area multiplier or mirrored weak peaks.
+- Add data-aware wide preprocessing, bounded automatic PH0/PH1, outer peak-excluded baseline anchors, persistent manual phase pivot/span, and a correction/sideband QC view. Inspect per-order residuals and detection significance in addition to global R2.
+- Record the supplied standard as including all sidebands without changing its area or mmol H. Withhold coverage for mismatched scopes, unreviewed satellite coverage or substantial local residuals; preserve calibration/acquisition/assignment gates.
+- Retain family overlays, per-curve colors/styles, exact-view copy/export, libraries and common graph features. Preserve old settings with an explicit full-range migration path. Add scientific, persistence, real-Tk and browser regression coverage.
+- Package a direct 0.10.0 to 0.10.2 update including 0.10.1. The linked-envelope model is inspired by DMfit ssb; it is not DMfit or a CSA/dipolar simulation.
+
+## 0.10.1 — 2026-09-29
+
+- Correct H NMR quantitation to decompose before integrating; retire direct-window/aromatic-mass-scaling as quantitative methods. Fit constrained Gaussian, Lorentzian or pseudo-Voigt aliphatic/aromatic envelopes, with an optional unassigned overlap band.
+- Add fit preview, component/sum/residual overlays, analytic finite-domain component integrals, fit diagnostics and raw-window diagnostic areas. Persist fit settings, records and styles with fingerprint-based invalidation.
+- Add individual decomposition line width/style/visibility, area shading and shared curve colors; clipboard and PNG/SVG/PDF retain the currently visible layers.
+- Withhold absolute ligand amounts/coverage until standard units/response, quantitative acquisition and assignments are reviewed. Separate proton-signal fractions from coverage; retain unclipped model algebra in the audit. Use entered mass ratios for pristine-core background, with optional independently known core mass.
+- Migrate old analysis settings safely, retain C NMR/DLS behavior, and update desktop/browser workflows and scientific/UI regression coverage.
+
+## 0.10.0 — 2026-09-29
+
+- Preserve C NMR under an ssNMR subtab and add complex H NMR import with immutable real/imaginary inputs, automatic zero-order phase, optional manual phase, baseline switches and common non-normalizing preprocessing.
+- Add independent persistent complex-spectrum and quantitative-parameter libraries, group preparation status, editable calibration/core/ligand/mass presets, and JSON portability. Lys defaults contain MW only.
+- Add confirmation-before-calculation, pristine-core corrected region areas, optional exploratory three-band Gaussian decomposition, apparent ligand coverage/loading/mass equivalents, signed out-of-range diagnostics, complete formula/input/processing audit and processed CSV export.
+- Keep absolute results explicitly provisional until standard area units/response and effective H assignments are verified; never clamp negative or >100% results.
+- Reuse shared desktop curve colors, legend editing, graph ratios, clipboard and exports; use font-aware rows and scrolling forms. Add the browser companion and quantitative/UI regression tests.
+
+## 0.9.2 — 2026-09-24
+
+- Added a shared Curve colors page to every desktop plot's settings, with native RGB selection, HEX/name input, live/manual apply, color swatches, per-curve/default restoration and font-sized scrollable rows.
+- Connected FTIR, NanoDrop, ssNMR raw/comparison, ZetaSizer means/replicates/bars, Lab DLS individual/average/overlay distributions, TEM histograms and custom-format plots. Keep overrides attached to data identity through hide/show, rename, reorder and region reprocessing.
+- Keep linked labels, mean/median lines, SD bands, legends and exports in sync with curve colors while preserving explicitly configured annotation colors. Color-only edits retain toolbar zoom/pan and do not change analysis data or results.
+- Unified web color pickers with default restoration and session persistence across hidden widgets; added missing ssNMR and TEM controls and separate ZetaSizer replicate colors.
+
 ## 0.9.1 — 2026-09-21
 
 - Moved the Lab DLS data list to the left and added per-measurement Hide/Exclude checkboxes. Exclusion immediately recomputes included counts, arithmetic averages, representative distributions and overlays without changing raw data. Saved libraries retain both flags and read older entries.

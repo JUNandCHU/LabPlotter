@@ -5,8 +5,10 @@ LabPlotter is a Windows and browser-based scientific workbench for FTIR, NanoDro
 - Origin-style scientific plots with editable axes, fonts, legends, annotations, and exact width:height export ratios (including square and reset)
 - Click-to-edit desktop legends with corner resizing/reflow and a visibility toggle in every plot toolbar
 - Shared default colors: black, dark red, navy, gray, green, purple, and ochre, using the specified RGB values
+- Every desktop plot has Graph settings → Curve colors: choose each curve's RGB/HEX color, preview live, and reset individually or together. Linked labels, mean/median lines, SD bands, legends and image exports follow the curve. Color choices survive hiding, renaming and ssNMR region reprocessing in the current workspace. Web graphs also provide curve color pickers and reset.
 - Multiple-file overlays and instrument-specific processing
 - TopSpin four-column ASCII ssNMR import, named/reorderable local library, auditable preprocessing, paired overlays, direct R²/Pearson r² for three configurable regions, aliphatic/aromatic integral ratios, and region buttons that rerun preprocessing with region-specific normalization (including editable Custom bounds)
+- Separate C NMR / H NMR workspaces. Complex TopSpin proton import, phase/baseline switches, shared non-normalizing preprocessing, persistent spectrum and parameter libraries, editable quantitative confirmation, constrained Gaussian/Lorentzian/pseudo-Voigt decomposition before integration, component/sum/residual overlays and full audits. Entered masses scale pristine-core background; aromatic intensity does not estimate mass. Absolute coverage is withheld until calibration, acquisition and assignments are reviewed. Fitted layers have independent colors, widths, styles and visibility in previews and exports. See the H NMR section of README_KO.md for equations, defaults and limitations.
 - Lab DLS raw Radius/Meas CSVs, two plots with a left-hand particle list, separate persistent library, draggable mean-radius annotations, representative/all-measurement views, live measurement hide/exclude controls and collapsible size/%PD tables
 - Four-panel ZetaSizer dashboard with a separate local particle library, automatic OCR summaries, and editable batch labels
 - Batch-aware TEM TIFF analysis with scale calibration, blank/duplicate rejection, reviewable particle overlays, size distributions, and CSV export
@@ -15,7 +17,7 @@ LabPlotter is a Windows and browser-based scientific workbench for FTIR, NanoDro
 - Desktop measurement data remains on the local computer
 - Session-oriented Streamlit web interface using the same scientific core
 
-The current development release is **0.9.1**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
+The current development release is **0.10.2**. Version 0.5.1 remains the first GitHub baseline. See [README_KO.md](README_KO.md) for the detailed Korean guide.
 
 ## Run from source
 

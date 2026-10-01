@@ -78,6 +78,10 @@ class NMRDesktopWorkflowTests(unittest.TestCase):
     def test_region_buttons_reprocess_and_custom_bounds_reach_settings_dialog(self):
         from labplotter.nmr import preprocess_pair
         window=ComparisonWindow(self.root,self.a,self.b,preprocess_pair(self.a,self.b));self.root.update()
+        window.plot.open_settings();self.root.update()
+        colors=window.plot.settings_window.curve_editor
+        colors.variables[self.a.uid].set('#12AB34')
+        colors.variables[self.b.uid].set('#AB3412')
         todo=[window];buttons={}
         while todo:
             widget=todo.pop();todo.extend(widget.winfo_children())
@@ -89,6 +93,7 @@ class NMRDesktopWorkflowTests(unittest.TestCase):
             self.assertEqual(window.plot.axis.get_xlim(),tuple(reversed(bounds)))
             self.assertEqual(window.metrics['requested_range_ppm'],list(bounds))
             self.assertAlmostEqual(np.nanmax(np.abs(window.result.a)),1)
+            self.assertEqual([line.get_color() for line in window.plot.axis.lines],['#12AB34','#AB3412'])
             np.testing.assert_allclose([row['ratio'] for row in window.ratios],ratios)
         window.fields['clow'].set('10');window.fields['chigh'].set('180')
         buttons['Custom region'].invoke();self.root.update()
