@@ -5,6 +5,7 @@ shared tails. Center bounds are NOT integration windows. No intensity
 normalization or aromatic-based mass inference is performed.
 """
 from dataclasses import asdict, dataclass
+from copy import deepcopy
 import hashlib
 import io
 import json
@@ -13,9 +14,15 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.special import erf
 
+MODEL_LABELS = {'envelopes': 'model Ver1', 'broad_core3': 'model Ver2',
+                'core_template': 'Legacy core template (0.10.7-0.10.8)'}
+SCALING_LABELS = {'aromatic_reference': 'On - aromatic reference', 'mass': 'Off - entered masses',
+                  'core_reference': 'Legacy core template scaling'}
+
 
 @dataclass
 class DecompositionSettings:
+    model: str = 'envelopes'
     fit_min: float = -20.
     fit_max: float = 25.
     aliphatic_min: float = 0.
@@ -33,18 +40,52 @@ class DecompositionSettings:
     mas_hz: float = 0.
     proton_mhz: float = 0.
     sideband_width_scale: float = 1.
-    fit_sideband_width: bool = True
+    fit_sideband_width: bool = False
+    allow_negative_sidebands: bool = False
+    aliphatic_gaussian_fraction: float | None = None
+    aromatic_gaussian_fraction: float | None = None
+    ligand_min: float = -.5
+    ligand_max: float = 3.
+    ligand_fwhm_min: float = .3
+    ligand_fwhm_max: float = 15.
+    template_shift_max: float = .3
+    template_broadening_max: float = 0.
+
+    unassigned_min: float = 2.
+    unassigned_max: float = 9.
+    unassigned_fwhm_min: float = 14.
+    unassigned_fwhm_max: float = 50.
+    complex_fit_min: float = -170.
+    complex_fit_max: float = 180.
+    joint_phase: bool = True
+    joint_phase0_limit: float = 30.
+    joint_phase1_limit: float = 180.
 
     def validate(self):
-        numbers = [v for k, v in asdict(self).items() if k != "line_shape" and not isinstance(v, bool)]
+        if self.model not in MODEL_LABELS:
+            raise ValueError('Choose a supported decomposition model.')
+        numbers = [v for k, v in asdict(self).items() if k not in ("line_shape", 'model') and v is not None and not isinstance(v, bool)]
         if not np.isfinite(numbers).all():
             raise ValueError("Decomposition bounds must be finite.")
         if not self.fit_min < self.aliphatic_min < self.aliphatic_max < self.aromatic_min < self.aromatic_max < self.fit_max:
             raise ValueError("Fit range must enclose separate increasing aliphatic / aromatic center bounds.")
         if not 0 < self.fwhm_min < self.fwhm_max <= 2*(self.fit_max-self.fit_min):
             raise ValueError("Use positive increasing FWHM bounds, at most twice the fit span.")
+        if self.model == 'core_template' and not self.fit_min < self.ligand_min < self.ligand_max < self.fit_max:
+            raise ValueError('Fit range must enclose the additional ligand center bounds.')
+        if self.model == 'core_template' and not 0 < self.ligand_fwhm_min < self.ligand_fwhm_max <= 2*(self.fit_max-self.fit_min):
+            raise ValueError('Use positive increasing ligand FWHM bounds within twice the fit span.')
+        if not 0 <= self.template_shift_max <= 10 or not 0 <= self.template_broadening_max <= 20:
+            raise ValueError('Core template shift: 0–10 ppm; extra Gaussian FWHM: 0–20 ppm (0 = fixed).')
         if self.line_shape not in ("pseudo_voigt", "gaussian", "lorentzian"):
             raise ValueError("Choose pseudo_voigt, gaussian or lorentzian.")
+        for fraction in (self.aliphatic_gaussian_fraction, self.aromatic_gaussian_fraction):
+            if fraction is not None and not 0 <= fraction <= 1:
+                raise ValueError('Fixed Gaussian fraction must be 0–1, or blank for free fitting.')
+        if self.line_shape != 'pseudo_voigt' and (self.aliphatic_gaussian_fraction is not None or (self.model == 'envelopes' and self.aromatic_gaussian_fraction is not None)):
+            raise ValueError('Use pseudo_voigt for per-family fixed G fractions, or leave them blank.')
+        if self.model == 'envelopes' and not self.sidebands and (self.aliphatic_gaussian_fraction is not None or self.aromatic_gaussian_fraction is not None):
+            raise ValueError('Per-family fixed Gaussian fractions require the linked MAS model.')
         if self.sideband_order != int(self.sideband_order) or not 1 <= self.sideband_order <= 4:
             raise ValueError("Sideband order must be an integer from 1 to 4 (each side).")
         self.sideband_order = int(self.sideband_order)
@@ -53,10 +94,43 @@ class DecompositionSettings:
         if self.mas_hz < 0 or self.proton_mhz < 0 or bool(self.mas_hz) != bool(self.proton_mhz):
             raise ValueError("Enter both MAS rate (Hz) and 1H frequency (MHz), or leave both at 0 (unknown).")
         spacing = self.mas_hz/self.proton_mhz if self.mas_hz else self.sideband_spacing
-        if self.sidebands and (spacing < 10 or self.fit_min > self.aliphatic_min-self.sideband_order*spacing or
-                              self.fit_max < self.aromatic_max+self.sideband_order*spacing):
+        lower = self.ligand_min if self.model == 'core_template' else self.aliphatic_min
+        upper = (self.aliphatic_max if self.overlap_band else self.ligand_max) if self.model == 'core_template' else self.aromatic_max
+        if self.model == 'core_template' and self.overlap_band: upper = self.aromatic_min
+        if self.sidebands and (spacing < 10 or self.fit_min > lower-self.sideband_order*spacing or
+                              self.fit_max < upper+self.sideband_order*spacing):
             raise ValueError("Fit range must cover all selected sideband centers. Expand preprocessing and fit bounds.")
+        if self.model == 'broad_core3':
+            if not self.fit_min < self.unassigned_min < self.unassigned_max < self.fit_max:
+                raise ValueError('Fit range must enclose the broad unassigned center bounds.')
+            if not 0 < self.unassigned_fwhm_min < self.unassigned_fwhm_max <= 2*(self.fit_max-self.fit_min):
+                raise ValueError('Use positive increasing broad unassigned FWHM bounds.')
+            if not self.complex_fit_min < self.complex_fit_max:
+                raise ValueError('Complex fitting bounds must increase.')
+            if not 0 < self.joint_phase0_limit <= 180 or not 0 < self.joint_phase1_limit <= 720:
+                raise ValueError('Joint phase limits: PH0 >0 to 180, PH1 >0 to 720 degrees.')
+            if self.allow_negative_sidebands or self.fit_sideband_width or (self.refine_spacing and not self.mas_hz):
+                raise ValueError('Ver2 uses nonnegative amplitudes and fixed MAS spacing / width multiplier.')
         return self
+
+
+def select_model(settings, model):
+    """Explicit model selection presets; never migrate a saved legacy template fit."""
+    settings = deepcopy(settings)
+    if settings.model != model and model == 'broad_core3':
+        settings.aliphatic_min, settings.aliphatic_max = -.5, 3.5
+        settings.aromatic_min, settings.aromatic_max = 5.5, 9.
+        settings.fwhm_min, settings.fwhm_max = .3, 15.
+        settings.line_shape = 'pseudo_voigt'
+        settings.aliphatic_gaussian_fraction = settings.aromatic_gaussian_fraction = None
+        settings.refine_spacing = settings.fit_sideband_width = settings.allow_negative_sidebands = False
+        settings.sideband_width_scale = 1.
+        settings.overlap_band = False  # Ver2 always includes its broad unassigned family.
+    settings.model = model
+    if hasattr(settings, 'core_scaling'):
+        if model == 'core_template' and settings.core_scaling == 'aromatic_reference': settings.core_scaling = 'core_reference'
+        elif model != 'core_template' and settings.core_scaling == 'core_reference': settings.core_scaling = 'aromatic_reference'
+    return settings
 
 
 def decomposition_defaults(spectrum, use_saved=True):
@@ -65,9 +139,11 @@ def decomposition_defaults(spectrum, use_saved=True):
     if saved:
         return DecompositionSettings(**saved).validate()
     if spectrum.x[0] <= -150 and spectrum.x[-1] >= 160:
-        from .hnmr_quality import estimate_spacing
-        spacing, _ = estimate_spacing(spectrum.x, spectrum.real+1j*spectrum.imag)
-        return DecompositionSettings(fit_min=-145., fit_max=155., sidebands=True, sideband_spacing=spacing)
+        from .hnmr_quality import estimate_spacing, instrument_preset
+        mas, mhz = instrument_preset(spectrum)
+        spacing = mas/mhz if mas else estimate_spacing(spectrum.x, spectrum.real+1j*spectrum.imag)[0]
+        return DecompositionSettings(fit_min=-145., fit_max=155., sidebands=True, sideband_spacing=spacing,
+                                     mas_hz=mas, proton_mhz=mhz, refine_spacing=not bool(mas))
     return DecompositionSettings()
 
 
@@ -117,6 +193,13 @@ def _domain(p, settings):
 
 
 def _result(p, audit):
+    audit = deepcopy(audit)
+    if audit.get('version') == 5:
+        from .hnmr_family import restore_family
+        return restore_family(p, audit)
+    if audit.get('version') == 4:
+        from .hnmr_template import restore_template
+        return restore_template(p, audit)
     settings = DecompositionSettings(**audit['settings']).validate()
     x, y = _domain(p, settings)
     if audit.get('lines'):
@@ -126,12 +209,28 @@ def _result(p, audit):
     else:
         curves = {name: profile(x, *params) for name, params in audit['parameters'].items()}
     total = sum(curves.values())
+    params = audit['parameters']
+    if 'aliphatic' in params and 'aromatic' in params:
+        separation = abs(params['aromatic'][1]-params['aliphatic'][1])
+        ratio = params['aliphatic'][2]/max(separation, 1e-12)
+        audit['aliphatic_width_over_center_separation'] = float(ratio)
+        if ratio > 2:
+            message = ('Aliphatic FWHM exceeds twice the separation between assigned centers: '
+                       'the broad component can capture shared peak tails. Review model sensitivity '
+                       'before interpreting its full area as chemical aliphatic H.')
+            if message not in audit['warnings']: audit['warnings'].append(message)
+            audit['broad_aliphatic_overlap'] = True
     return DecompositionResult(x, y, curves, total, y-total, dict(audit['areas']), audit)
 
 
-def restore_decomposition(p, record):
+def restore_decomposition(p, record, reference=None):
     """A stored fit is never reused after data, phase, grid or baseline changes."""
-    if not record or record.get('version') not in (1, 2) or record.get('processed_sha256') != fingerprint(p):
+    if not record or record.get('version') not in (1, 2, 3, 4, 5) or record.get('processed_sha256') != fingerprint(p):
+        return None
+    if record.get('version') == 5:
+        from .hnmr_family import complex_fingerprint
+        if record.get('complex_sha256') != complex_fingerprint(p): return None
+    if reference is not None and record.get('version') == 4 and record.get('reference_processed_sha256') != fingerprint(reference):
         return None
     try:
         return _result(p, record)
@@ -139,8 +238,14 @@ def restore_decomposition(p, record):
         return None
 
 
-def decompose(p, settings=None):
+def decompose(p, settings=None, reference=None, reference_info=None, fixed_core_scale=None):
     settings = (settings or DecompositionSettings()).validate()
+    if settings.model == 'broad_core3':
+        from .hnmr_family import fit_family
+        return fit_family(p, settings)
+    if settings.model == 'core_template':
+        from .hnmr_template import fit_template
+        return fit_template(p, reference, settings, reference_info=reference_info, fixed_core_scale=fixed_core_scale)
     if settings.sidebands:
         from .hnmr_sidebands import fit_sidebands
         return fit_sidebands(p, settings)
@@ -220,6 +325,9 @@ def decompose(p, settings=None):
 
 
 def decomposition_values(fit):
+    if fit.audit.get('version') == 4:
+        from .hnmr_template import template_values
+        return template_values(fit)
     a, b = fit.areas['aliphatic'], fit.areas['aromatic']
     values = {'aliphatic_integral': a, 'aromatic_integral': b,
             'unassigned_integral': fit.areas.get('unassigned', 0.),
@@ -232,6 +340,13 @@ def decomposition_values(fit):
     if 'spacing_ppm' in fit.audit:
         values['sideband_spacing_ppm'] = fit.audit['spacing_ppm']
         values['detected_sideband_envelopes'] = fit.audit['sideband_diagnostics']['detected_sideband_envelopes']
+    for family, area in fit.audit.get('full_profile_areas', {}).items():
+        values[family+'_full_profile_integral'] = area
+    for family in ('aliphatic','aromatic'):
+        params = fit.audit['parameters'][family]
+        values[family+'_center_ppm'] = params[1]
+        values[family+'_FWHM_ppm'] = params[2]
+        values[family+'_Gaussian_fraction'] = 1-params[3]
     return values
 
 

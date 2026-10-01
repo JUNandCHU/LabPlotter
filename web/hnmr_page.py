@@ -9,7 +9,7 @@ import numpy as np
 import streamlit as st
 from labplotter.hnmr import (HNMRSettings, QuantSettings, common_settings, default_parameters,
     infer_identity, parse_hnmr_text, prepare_spectra, preview_spectrum, quant_defaults, quantify, result_csv, restored_quant_settings)
-from labplotter.hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv, decomposition_defaults)
+from labplotter.hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv, decomposition_defaults, MODEL_LABELS, SCALING_LABELS)
 from labplotter.hnmr_plot import ROLES, draw_hnmr
 from matplotlib.figure import Figure
 from labplotter.plotting import apply_origin_style
@@ -128,8 +128,8 @@ def preprocessing_dialog():
                       sideband_spacing='Approximate sideband spacing (ppm)', baseline_anchor_min='Baseline anchors: minimum distance from 4.5 ppm')
         cols = st.columns(2)
         for i, (key, value) in enumerate(defaults.items()):
-            if isinstance(value, bool): values[key] = cols[i%2].checkbox(labels[key], value, key='h-pre-'+key)
-            else: values[key] = cols[i%2].number_input(labels[key], value=float(value), format='%.8f', key='h-pre-'+key)
+            if isinstance(value, bool): values[key] = cols[i%2].checkbox(labels.get(key, key.replace('_', ' ')), value, key='h-pre-'+key)
+            else: values[key] = cols[i%2].number_input(labels.get(key, key.replace('_', ' ')), value=float(value), format='%.8f', key='h-pre-'+key)
         st.caption('No intensity normalization. Inspect phase and candidate baseline edges; broadening/alignment are off by default.')
         if st.form_submit_button('Apply common H NMR preprocessing'):
             try:
@@ -156,7 +156,7 @@ def quant_dialog(s):
         masses = {r['name']:r['mass_mg'] for r in params['samples']}
         defaults['reference_mass_mg'] = masses.get(core)
         row = next(r for r in params['standards'] if r['name'] == standard)
-        for k, v in (('standard_area','area'),('standard_mmol_h','mmol_h'),('standard_basis','basis'),('standard_grid_step','grid_step'),('frequency_mhz','frequency_mhz'),('calibration_verified','verified'),('standard_includes_sidebands','includes_sidebands')): defaults[k] = row[v]
+        for k, v in (('standard_area','area'),('standard_umol_h','umol_h'),('standard_basis','basis'),('standard_grid_step','grid_step'),('frequency_mhz','frequency_mhz'),('calibration_verified','verified'),('standard_includes_sidebands','includes_sidebands')): defaults[k] = row[v]
         st.session_state['_h_quant_override'] = (s.uid, defaults)
         for key in defaults: st.session_state.pop('h-q-'+s.uid+'-'+key, None)
         st.rerun(scope='fragment')
@@ -167,15 +167,15 @@ def quant_dialog(s):
                           format_func=lambda u: next(v.name for v in spectra if v.uid == u), key='h-q-reference-'+s.uid)
     with st.form('h-quant-form'):
         values = {}; cols = st.columns(2)
-        choices = {'standard_basis':('ppm','point_sum','hz'), 'line_shape':('pseudo_voigt','gaussian','lorentzian')}
-        defaults.pop('core_scaling', None); defaults.pop('method', None)
+        choices = {'standard_basis':('ppm','point_sum','hz'), 'line_shape':('pseudo_voigt','gaussian','lorentzian'), 'model':tuple(MODEL_LABELS), 'core_scaling':tuple(SCALING_LABELS)}
+        defaults.pop('method', None)
         for i, (key, value) in enumerate(defaults.items()):
             widget_key = 'h-q-'+s.uid+'-'+key; label = {'effective_h':'H atoms represented per ligand (not particle mass)', 'sample_core_mass_mg':'Known core mass (mg; blank = total mass approximation)'}.get(key, key.replace('_', ' '))
             target = cols[i%2]
             if isinstance(value, bool): values[key] = target.checkbox(label, value, key=widget_key)
             elif key in choices: values[key] = target.selectbox(label, choices[key], index=choices[key].index(value), key=widget_key)
             else: values[key] = target.text_input(label, '' if value is None else str(value), key=widget_key)
-        st.caption('Both spectra are decomposed using the same model. Center bounds are not integration cutoffs. Entered masses scale pristine-core background; aromatic intensity does not estimate mass. Absolute coverage is withheld until calibration, acquisition and component assignments are reviewed.')
+        st.caption('Both spectra use the selected model and background scaling. Standard H amount is in micromoles (umol H). Center bounds are not integration cutoffs. Results remain provisional until calibration, acquisition and assignments are reviewed.')
         if st.form_submit_button('Confirm parameters and calculate H NMR'):
             try:
                 for key, value in values.items():
@@ -197,7 +197,7 @@ def decomposition_dialog(s):
     st.caption('MAS sidebands: centers follow delta + order × spacing; +/- heights are independent. With MAS rate and 1H MHz both 0, spacing is only an estimate. Weak outer peaks require review. The optional fitted width multiplier relaxes the DMfit equal-width link.')
     if st.button('Restore data-aware MAS defaults', key='h-fit-defaults'):
         settings=decomposition_defaults(s,use_saved=False)
-        for key,value in asdict(settings).items(): st.session_state['h-fit-'+key]=value if isinstance(value,(bool,str)) else float(value)
+        for key,value in asdict(settings).items(): st.session_state['h-fit-'+key]=value if isinstance(value,(bool,str)) or value is None else float(value)
     st.write('Fit the processed spectrum with aliphatic and aromatic envelopes. The center bounds guide assignments; areas include overlapping tails over the entire fit range. An optional overlap band remains unassigned.')
     with st.form('h-decomposition-form'):
         values = {}; cols = st.columns(2)
@@ -205,12 +205,17 @@ def decomposition_dialog(s):
             label = key.replace('_', ' ')
             if 'aliphatic' in key or 'aromatic' in key: label += ' (center bound, ppm)'
             if isinstance(value, bool): values[key] = cols[i%2].checkbox(label, value, key='h-fit-'+key)
-            elif key == 'line_shape':
-                choices = ('pseudo_voigt','gaussian','lorentzian')
+            elif key in ('line_shape', 'model'):
+                choices = ('pseudo_voigt','gaussian','lorentzian') if key == 'line_shape' else tuple(MODEL_LABELS)
                 values[key] = cols[i%2].selectbox(label, choices, index=choices.index(value), key='h-fit-'+key)
+            elif key in ('aliphatic_gaussian_fraction', 'aromatic_gaussian_fraction'):
+                raw = cols[i%2].text_input(label+' (blank = fitted)', '' if value is None else str(value), key='h-fit-'+key)
+                values[key] = raw
             else: values[key] = cols[i%2].number_input(label, value=float(value), key='h-fit-'+key)
         if st.form_submit_button('Fit and overlay H NMR'):
             try:
+                for key in ('aliphatic_gaussian_fraction', 'aromatic_gaussian_fraction'):
+                    values[key] = float(values[key]) if values[key].strip() else None
                 fit = decompose(preview_spectrum(s), DecompositionSettings(**values))
                 _invalidate(fits=False)
                 s.metadata.update(decomposition=fit.record(), decomposition_settings=values)

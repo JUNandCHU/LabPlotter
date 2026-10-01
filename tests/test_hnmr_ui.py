@@ -8,8 +8,9 @@ from unittest.mock import patch
 import unittest
 import numpy as np
 from labplotter.hnmr import common_settings, prepare_spectra, preview_spectrum, quantify, QuantSettings
+from labplotter.hnmr_decomposition import MODEL_LABELS, SCALING_LABELS
 from labplotter.hnmr_library import HNMRLibrary,HNMRParameterLibrary
-from labplotter.hnmr_ui import HNMRTab,HPreprocessingDialog,HDecompositionDialog,HQualityDialog,QuantDialog,ParameterWindow,NMRWorkspace
+from labplotter.hnmr_ui import HNMRTab,HPreprocessingDialog,HDecompositionDialog,HQualityDialog,HComponentDialog,HStabilityDialog,QuantDialog,ParameterWindow,NMRWorkspace,HBatchQuantDialog
 from labplotter.nmr_ui import nmr_tree_style
 from test_hnmr import fixture
 
@@ -36,16 +37,74 @@ class HNMRDesktopTests(unittest.TestCase):
         d.destroy()
         q=QuantDialog(self.tab,self.a);self.root.update()
         self.assertFalse(self.tab.results)  # Opening the dialog never calculates.
-        q.fields['standard_area'].set('100');q.fields['standard_mmol_h'].set('.001')
+        q.fields['standard_area'].set('100');q.fields['standard_umol_h'].set('1')
         q.calculate();self.root.update()
         self.assertIn(self.a.uid,self.tab.results)
-        self.assertGreater(len(self.tab.result_tree.get_children()),10)
-        self.assertEqual(len(self.tab.plot.axis.lines),5)
+        self.assertEqual(len(self.tab.result_tree.get_children()),2)
+        self.assertEqual(tuple(self.tab.result_tree['columns']),('sample','aromatic','aliphatic','coverage'))
+        self.assertEqual(len(self.tab.plot.axis.lines),4)
         self.tab.baseline.set(False);self.tab.correction_changed();self.root.update()
         self.assertFalse(self.tab.results);self.assertFalse(self.a.processing['prepared'])
         self.assertEqual(len(self.tab.plot.axis.lines),1);self.assertFalse(self.errors)
 
+    def test_batch_reports_all_numeric_provisional_values_and_shows_coverage_first(self):
+        d=HBatchQuantDialog(self.tab);self.root.update()
+        self.assertFalse(self.tab.results)
+        d.run();self.root.update()
+        self.assertEqual(len(self.tab.results),2)
+        self.assertTrue(all(row['apparent_coverage_percent'] is not None for row in d.rows))
+        self.assertTrue(all(row['provisional'] for row in d.rows))
+        self.assertEqual(self.tab.results[self.b.uid].values['apparent_coverage_percent'],0.)
+        self.assertFalse(self.a.metadata['analysis_parameters']['calibration_verified'])
+        first=self.tab.result_tree.get_children()[0]
+        self.assertEqual(self.tab.result_tree.item(first,'values')[0],self.b.name)
+        self.assertEqual(self.tab.result_tree.item(first,'values')[3],'0')
+        self.assertIn('Provisional',self.tab.result_status.get())
+        self.assertTrue(self.tab.result_tree.bbox(first));self.assertFalse(self.errors)
+        d.destroy()
+
+    def test_value_drag_is_readonly_and_copy_table_contains_units(self):
+        prepare_spectra([self.a,self.b],common_settings([self.a,self.b]))
+        self.tab.results[self.a.uid]=quantify(self.a,self.b,QuantSettings())
+        self.tab._refresh();self.root.update()
+        tree=self.tab.result_tree
+        # Short deterministic cell content allows testing native drag selection
+        # independently of the scientific fit's formatting.
+        iid=tree.get_children()[0];tree.item(iid,values=('PDA','1.25','2.5','123.456789'))
+        tree.xview_moveto(1.);tree.see(iid);self.root.update()
+        x,y,w,h=tree.bbox(iid,'coverage');start=max(x+5,5)
+        tree.event_generate('<ButtonPress-1>',x=start,y=y+h//2);self.root.update()
+        tree.event_generate('<B1-Motion>',x=start+170,y=y+h//2)
+        tree.event_generate('<ButtonRelease-1>',x=start+170,y=y+h//2);self.root.update()
+        editor=self.tab.result_selection.entry
+        self.assertIsNotNone(editor);self.assertTrue(editor.selection_present())
+        self.assertEqual(str(editor.cget('state')),'readonly')
+        self.tab.result_selection.copy_value()
+        self.assertIn(self.root.clipboard_get(),'123.456789')
+        self.tab.result_selection.copy_table()
+        self.assertIn('PDA\t1.25\t2.5\t123.456789',self.root.clipboard_get())
+        self.assertEqual(tree.item(iid,'values')[3],'123.456789')
+        tree.event_generate('<MouseWheel>',delta=-120);self.root.update()
+        self.assertIsNone(self.tab.result_selection.entry)
+        self.assertFalse(self.errors)
+
+    def test_refine_keeps_prepared_group_and_invalidates_old_results(self):
+        prepare_spectra([self.a,self.b],common_settings([self.a,self.b]))
+        self.tab.results[self.a.uid]=quantify(self.a,self.b,QuantSettings())
+        with patch.object(self.tab,'quality'):
+            self.tab.refine_corrections()
+        self.assertFalse(self.tab.results)
+        self.assertTrue(self.a.processing['prepared'])
+        self.assertEqual(self.a.processing['group_id'],self.b.processing['group_id'])
+        self.assertTrue(self.a.processing['settings']['balance_sidebands'])
+        self.assertFalse(self.errors)
+
     def test_reference_core_switch_updates_capacity_and_library_load(self):
+        duplicate=fixture('PDA repeat');self.tab.add_spectra([duplicate]);self.tab.tree.selection_set(self.a.uid)
+        self.a.metadata['analysis_reference_uid']=duplicate.uid
+        saved_dialog=QuantDialog(self.tab,self.a);self.root.update()
+        self.assertEqual(self.tab.spectra[saved_dialog.reference.current()].uid,duplicate.uid);saved_dialog.destroy()
+        self.tab.spectra.remove(duplicate);self.tab.refresh_rows()
         c=fixture('ANP');self.tab.add_spectra([c]);self.tab.tree.selection_set(self.a.uid)
         q=QuantDialog(self.tab,self.a);q.fields['core'].set('ANP');self.root.update()
         self.assertAlmostEqual(float(q.fields['capacity_umol_mg'].get()),.1619)
@@ -95,7 +154,7 @@ class HNMRDesktopTests(unittest.TestCase):
         d=HDecompositionDialog(self.tab,self.a);self.root.update();d.preview();self.root.update()
         self.assertIsNotNone(d.fit);self.assertNotIn('decomposition',self.a.metadata)
         d.apply();self.root.update()
-        self.assertEqual(len(self.tab.plot.axis.lines),5)
+        self.assertEqual(len(self.tab.plot.axis.lines),4)
         self.assertTrue(self.tab.plot.export_current_view)
         self.tab.plot.open_settings();self.root.update()
         ext=self.tab.plot.settings_extension
@@ -114,7 +173,7 @@ class HNMRDesktopTests(unittest.TestCase):
         self.tab.show_components.set(True);self.tab.components_changed();self.root.update()
         captured=[]
         self.tab.plot._with_annotation_visibility(False,lambda:captured.append([v.get_visible() for v in self.tab.plot.overlay_artists]))
-        self.assertEqual(captured,[[True]*4])
+        self.assertEqual(captured,[[True]*3])
         self.assertFalse(self.errors)
 
     def test_parameters_persist_and_lys_stays_unconfigured(self):
@@ -123,6 +182,98 @@ class HNMRDesktopTests(unittest.TestCase):
         self.assertEqual(self.tab.parameters.load()['cores'][0]['capacity'],.27)
         self.assertIsNone(self.tab.parameters.load()['ligands'][-1]['effective_h'])
         self.assertFalse(self.errors)
+
+    def test_ver2_model_reference_quantitation_styles_and_restore(self):
+        from labplotter.hnmr_decomposition import DecompositionSettings, restore_decomposition
+        prepare_spectra([self.a,self.b],common_settings([self.a,self.b]))
+        d=HDecompositionDialog(self.tab,self.a);self.root.update()
+        self.assertEqual(d.form.vars['model'].get(),'model Ver1')
+        self.assertEqual(str(d.reference.cget('state')),'disabled')
+        d.form.vars['model'].set(MODEL_LABELS['core_template']);self.root.update()
+        self.assertEqual(str(d.reference.cget('state')),'readonly')
+        self.assertEqual(d.selected_reference(DecompositionSettings(model='core_template')).uid,self.b.uid)
+        d.preview();self.root.update();self.assertIsNotNone(d.fit,d.status.get())
+        d.apply();self.root.update()
+        self.assertEqual(self.a.metadata['decomposition']['version'],4)
+        q=QuantDialog(self.tab,self.a);self.root.update()
+        self.assertEqual(q.fields['model'].get(),MODEL_LABELS['core_template'])
+        self.assertEqual(q.fields['core_scaling'].get(),SCALING_LABELS['core_reference'])
+        q.calculate();self.root.update()
+        result=self.tab.results[self.a.uid]
+        self.assertLess(result.values['coverage_lower_percent'],result.values['coverage_upper_percent'])
+        self.assertEqual(result.values['schiff_H_per_ligand'],13.)
+        self.assertEqual(result.values['michael_H_per_ligand'],14.)
+        self.assertIn('Additional ligand component',[line.get_label() for line in self.tab.plot.axis.lines])
+        self.tab.plot.open_settings();self.root.update()
+        ext=self.tab.plot.settings_extension
+        ext.vars['ligand']['width'].set('3.75');ext.apply();self.root.update()
+        self.tab.tree.selection_set(self.a.uid);self.tab.save()
+        saved=self.tab.library.load(self.a.uid)
+        self.assertIsNotNone(restore_decomposition(preview_spectrum(saved),saved.metadata['decomposition']))
+        self.assertEqual(saved.metadata['decomposition_styles']['ligand']['width'],3.75)
+        self.assertFalse(self.errors)
+
+    def test_new_ver2_and_aromatic_switch_compact_table_and_more_info(self):
+        from copy import deepcopy
+        from test_hnmr_family import synthetic
+        core,cfg,_,_ = synthetic()
+        sample=deepcopy(core);sample.uid+='new';sample.name='ANP-C6';sample.real*=1.1;sample.imag*=1.1
+        prepare_spectra([core,sample],cfg)
+        self.tab.add_spectra([core,sample]);self.root.update()
+        q=QuantDialog(self.tab,sample);self.root.update()
+        self.assertEqual(q.fields['model'].get(),'model Ver1')
+        q.fields['model'].set('model Ver2');self.root.update()
+        self.assertEqual(float(q.fields['aliphatic_min'].get()),-.5)
+        self.assertEqual(str(q.forms[2].widgets['unassigned_min'].cget('state')),'normal')
+        q.calculate();self.root.update()
+        result=self.tab.results[sample.uid]
+        self.assertEqual(result.sample_fit.audit['version'],5)
+        self.assertEqual(set(result.sample_fit.curves),{'aliphatic','aromatic','unassigned'})
+        self.assertIn('ON',self.tab.result_status.get())
+        self.assertEqual(len(self.tab.result_tree.get_children()),4)
+        self.assertNotEqual(self.tab.result_tree.item(sample.uid,'values')[1],'--')
+        old=result.values['apparent_coverage_percent']
+        q=QuantDialog(self.tab,sample);self.root.update()
+        q.fields['core_scaling'].set(SCALING_LABELS['mass']);q.calculate();self.root.update()
+        result=self.tab.results[sample.uid]
+        self.assertEqual(result.parameters['core_scaling'],'mass')
+        self.assertNotAlmostEqual(old,result.values['apparent_coverage_percent'])
+        self.assertIn('OFF',self.tab.result_status.get())
+        self.tab.result_units.set('Raw integral (intensity·ppm)');self.tab._refresh();self.root.update()
+        self.assertEqual(self.tab.result_tree.item(sample.uid,'values')[2],f"{result.values['aliphatic_integral']:.6g}")
+        self.tab.audit();self.root.update()
+        dialog=[w for w in self.tab.winfo_children() if isinstance(w,tk.Toplevel)][-1]
+        book=next(w for w in dialog.winfo_children() if isinstance(w,ttk.Notebook))
+        self.assertEqual(len(book.tabs()),3)
+        self.assertGreater(len(dialog.value_selection.tree.get_children()),20)
+        dialog.destroy()
+        self.assertFalse(self.errors)
+
+    def test_long_withheld_status_cannot_hide_result_rows(self):
+        prepare_spectra([self.a,self.b],common_settings([self.a,self.b]))
+        result=quantify(self.a,self.b,QuantSettings())
+        result.quantitative_status='Withheld: '+('long scientific warning; '*100)
+        self.tab.results[self.a.uid]=result
+        font=tkfont.nametofont('TkDefaultFont');old=font.cget('size');font.configure(size=18)
+        try:
+            nmr_tree_style(self.root);self.tab._refresh();self.root.update()
+            self.assertLess(len(self.tab.result_status.get()),290)
+            self.assertTrue(self.tab.result_tree.winfo_ismapped())
+            self.assertGreater(self.tab.result_tree.winfo_height(),font.metrics('linespace')*3)
+            first=self.tab.result_tree.get_children()[0]
+            self.assertTrue(self.tab.result_tree.bbox(first))
+            dialog=HComponentDialog(self.tab,result.sample_fit);self.root.update()
+            self.assertGreater(len(dialog.tree.get_children()),2);dialog.destroy()
+        finally:font.configure(size=old);nmr_tree_style(self.root)
+        self.assertFalse(self.errors)
+
+    def test_stability_dialog_shows_comparison_without_replacing_fit(self):
+        prepare_spectra([self.a,self.b],common_settings([self.a,self.b]))
+        dialog=HStabilityDialog(self.tab,self.a);self.root.update();dialog.run();self.root.update()
+        self.assertIsNotNone(dialog.report)
+        self.assertEqual(len(dialog.tree.get_children()),6)
+        self.assertFalse(self.tab.results)
+        self.assertFalse(self.errors);dialog.destroy()
 
     def test_sideband_qc_full_view_styles_and_library_preserve_orders(self):
         from test_hnmr_sidebands import mas_fixture
@@ -133,7 +284,7 @@ class HNMRDesktopTests(unittest.TestCase):
         s.metadata.update(decomposition=fit.record(),decomposition_settings=fit.audit['settings'])
         self.tab.add_spectra([s]);self.tab.full_view();self.root.update()
         self.assertGreater(max(self.tab.plot.axis.get_xlim()),150)
-        self.assertEqual(len(self.tab.plot.axis.lines),5)
+        self.assertEqual(len(self.tab.plot.axis.lines),4)
         d=HQualityDialog(self.tab,s);self.root.update()
         self.assertEqual(len(d.tree.get_children()),6)
         self.assertEqual(len(d.plot.axis.lines),5)

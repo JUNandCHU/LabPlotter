@@ -298,10 +298,11 @@ class NMRLibraryWindow(tk.Toplevel):
 
 
 class SSNMRTab(ttk.Frame):
-    def __init__(self, parent, library=None):
+    def __init__(self, parent, library=None, *, import_paths=None):
         from .ui import PlotPane
         super().__init__(parent)
         self.library = library or NMRLibrary()
+        self.import_paths = import_paths or self.add_paths
         self.spectra: list[Spectrum] = []
         self.library_window = None
         panes = ttk.Panedwindow(self, orient='horizontal'); panes.pack(fill='both', expand=True)
@@ -325,8 +326,10 @@ class SSNMRTab(ttk.Frame):
         self.plot.pack(fill='both', expand=True)
 
     def add_dialog(self):
-        paths = filedialog.askopenfilenames(parent=self, filetypes=[('TopSpin ASCII', '*.txt *.asc *.csv *.tsv')])
-        self.add_paths(paths)
+        paths = filedialog.askopenfilenames(parent=self,
+            title=tr('Import NMR ASCII (C / H auto-detect)'),
+            filetypes=[('TopSpin ASCII', '*.txt *.asc *.csv *.tsv')])
+        self.import_paths(paths)
 
     def add_paths(self, paths):
         loaded, errors = [], []

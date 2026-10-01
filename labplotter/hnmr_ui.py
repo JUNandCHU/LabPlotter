@@ -10,14 +10,20 @@ from tkinter.scrolledtext import ScrolledText
 
 import numpy as np
 from .i18n import tr, localize_widget_tree
-from .hnmr import (HNMRSettings, QuantSettings, common_settings, infer_identity,
+from .hnmr import (HNMRSpectrum, HNMRSettings, QuantSettings, common_settings, infer_identity,
                    parse_hnmr_ascii, prepare_spectra, preview_spectrum, quant_defaults,
                    quantify, result_csv, restored_quant_settings)
 from .hnmr_decomposition import (DecompositionSettings, decompose, restore_decomposition, decomposition_values, decomposition_csv, decomposition_defaults)
-from .hnmr_plot import ROLES, draw_hnmr
+from .hnmr_decomposition import MODEL_LABELS, SCALING_LABELS, select_model
+from .hnmr_summary import UNITS, summary_cells, short_status, number
+from .hnmr_reactions import REACTION_NOTE
+from .hnmr_plot import ROLES, draw_hnmr, default_visible
+from .table_copy import SelectableTreeCells
 from .hnmr_library import (HNMRLibrary, HNMRParameterLibrary, PARAMETER_FIELDS,
                            export_hnmr_library, import_hnmr_library, validate_parameters)
+from .hnmr_batch import batch_plan, remember_result, summary_row, summary_csv
 from .nmr_ui import SSNMRTab, nmr_tree_style, save_text
+from .nmr_import import parse_nmr_ascii
 from .plotting import PlotOptions, SERIES_PALETTE
 from .curve_colors import curve_color
 
@@ -37,11 +43,20 @@ def _tree(parent, columns, height=8, selectmode="extended"):
     return frame, tree
 
 
+def _fit_table_values(tree):
+    """Keep scientific notation legible at the user's font size; allow scrolling."""
+    font = tkfont.nametofont('TkDefaultFont')
+    for index, key in enumerate(tree['columns']):
+        texts = [tree.heading(key, 'text')]+[str(tree.item(iid, 'values')[index]) for iid in tree.get_children()]
+        width = max(font.measure(text) for text in texts)+28
+        tree.column(key, width=max(int(tree.column(key, 'width')), width))
+
+
 class Fields(ttk.Frame):
     """Short, labeled forms; nullable numbers remain blank, never guessed."""
     def __init__(self, parent, specs, values):
         super().__init__(parent, padding=10)
-        self.specs, self.vars, self.widgets = specs, {}, {}
+        self.specs, self.vars, self.widgets, self.labels = specs, {}, {}, {}
         self.canvas = tk.Canvas(self, highlightthickness=0, width=650, height=min(480, len(specs)*48))
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=scrollbar.set)
@@ -53,13 +68,17 @@ class Fields(ttk.Frame):
         body.columnconfigure(1, weight=1, minsize=170)
         for i, (key, label, kind) in enumerate(specs):
             value = values.get(key)
+            if key == 'model': value = MODEL_LABELS.get(value,value)
+            if key == 'core_scaling': value = SCALING_LABELS.get(value,value)
             var = tk.BooleanVar(value=bool(value)) if kind == "bool" else tk.StringVar(value="" if value is None else str(value))
             self.vars[key] = var
-            ttk.Label(body, text=tr(label), wraplength=360).grid(row=i, column=0, sticky="w", padx=(0, 15), pady=5)
+            self.labels[key] = ttk.Label(body, text=tr(label), wraplength=360)
+            self.labels[key].grid(row=i, column=0, sticky="w", padx=(0, 15), pady=5)
             if kind == "bool":
                 widget = ttk.Checkbutton(body, variable=var)
             elif isinstance(kind, tuple) or kind == "basis":
-                options = kind if isinstance(kind, tuple) else ("ppm", "point_sum", "hz")
+                options = tuple(MODEL_LABELS.values()) if key == 'model' else kind if isinstance(kind, tuple) else ("ppm", "point_sum", "hz")
+                if key == 'core_scaling': options = tuple(SCALING_LABELS.get(k,k) for k in kind)
                 widget = ttk.Combobox(body, textvariable=var, values=options, state="readonly", width=24)
             else:
                 widget = ttk.Entry(body, textvariable=var, width=26)
@@ -80,12 +99,55 @@ class Fields(ttk.Frame):
                         raise ValueError(f"{key}: enter a number.") from exc
             else:
                 result[key] = value.strip() if isinstance(value, str) else value
+            if key == 'model': result[key] = next((k for k,v in MODEL_LABELS.items() if v == value), value)
+            if key == 'core_scaling': result[key] = next((k for k,v in SCALING_LABELS.items() if v == value), value)
         return result
 
     def set_values(self, values):
         for key, value in values.items():
             if key in self.vars:
+                if key == 'model': value = MODEL_LABELS.get(value,value)
+                if key == 'core_scaling': value = SCALING_LABELS.get(value,value)
                 self.vars[key].set("" if value is None else value)
+
+
+def _model_fields(forms):
+    variables = {k:v for form in forms for k,v in form.vars.items()}
+    widgets = {k:v for form in forms for k,v in form.widgets.items()}
+    model = next((k for k,v in MODEL_LABELS.items() if v == variables['model'].get()),variables['model'].get())
+    previous = getattr(forms[0], '_last_model', model)
+    cache = getattr(forms[0], '_model_cache', {})
+    cache[previous] = {k:v.get() for k,v in variables.items() if k in DecompositionSettings.__dataclass_fields__ and k != 'model'}
+    if previous != model:
+        if model in cache:
+            for k,value in cache[model].items(): variables[k].set(value)
+        elif model == 'broad_core3':
+            old = asdict(DecompositionSettings())
+            preset = asdict(select_model(DecompositionSettings(),model))
+            for k,value in preset.items():
+                if k != 'model' and value != old[k] and k in variables:
+                    variables[k].set('' if value is None else value)
+    forms[0]._model_cache = cache
+    forms[0]._last_model = model
+    modern = model == 'core_template'
+    family = model == 'broad_core3'
+    for name in ('unassigned_min','unassigned_max','unassigned_fwhm_min','unassigned_fwhm_max',
+                 'complex_fit_min','complex_fit_max','joint_phase','joint_phase0_limit','joint_phase1_limit'):
+        if name in widgets: widgets[name].configure(state='normal' if family else 'disabled')
+    for name in ('overlap_band','refine_spacing','fit_sideband_width','allow_negative_sidebands'):
+        if name in widgets: widgets[name].configure(state='disabled' if family else 'normal')
+    for name in ('ligand_min','ligand_max','ligand_fwhm_min','ligand_fwhm_max','template_shift_max','template_broadening_max'):
+        if name in widgets: widgets[name].configure(state='normal' if modern else 'disabled')
+    for form in forms:
+        if 'aliphatic_gaussian_fraction' in form.labels:
+            form.labels['aliphatic_gaussian_fraction'].configure(text=tr('Additional ligand G fraction (0=L, 1=G; blank=fit)' if modern else 'Aliphatic G fraction (0=L, 1=G; blank=fit)'))
+            form.labels['aromatic_gaussian_fraction'].configure(text=tr('Aromatic G fraction (Ver1 only)' if modern else 'Aromatic G fraction (0=L, 1=G; blank=fit)'))
+            form.widgets['aromatic_gaussian_fraction'].configure(state='disabled' if modern else 'normal')
+    if 'core_scaling' in variables:
+        target = 'core_reference' if modern else 'aromatic_reference'
+        widgets['core_scaling'].configure(values=(SCALING_LABELS[target],SCALING_LABELS['mass']))
+        if variables['core_scaling'].get() not in ('mass',SCALING_LABELS['mass']): variables['core_scaling'].set(SCALING_LABELS[target])
+    return modern
 
 
 def _window(window, title, geometry="1050x740"):
@@ -99,13 +161,18 @@ def _wrap_controls(frame):
     """Wrap quick controls using actual font-sized widget widths."""
     widgets = frame.winfo_children()
     for widget in widgets: widget.pack_forget()
+    # Grid columns are shared across rows, so their maximum widths can make
+    # a supposedly wrapped row overflow. Place each row independently.
+    frame.pack_propagate(False); frame.grid_propagate(False)
     def layout(_=None):
-        width = max(frame.winfo_width(), 1); used = 0; row = 0; col = 0
+        width = max(frame.winfo_width(), 1); used = 0; y = 0; height = 0
         for widget in widgets:
             needed = widget.winfo_reqwidth()+8
-            if used and used+needed > width: row += 1; col = 0; used = 0
-            widget.grid(row=row, column=col, sticky="w", padx=4, pady=2)
-            used += needed; col += 1
+            if used and used+needed > width:
+                y += height; used = 0; height = 0
+            widget.place(x=used+4, y=y+2)
+            used += needed; height = max(height, widget.winfo_reqheight()+4)
+        frame.configure(height=max(1,y+height))
     frame.bind("<Configure>", layout, add=True)
     frame.after_idle(layout)
 
@@ -200,12 +267,15 @@ PREPROCESS_FIELDS = [
     ("ppm_min", "Common ppm minimum", "number"), ("ppm_max", "Common ppm maximum", "number"),
     ("grid_step", "Grid step (ppm)", "number"), ("phase", "Phase correction", "bool"),
     ("auto_phase1", "Bounded automatic PH0 / PH1 (complex data)", "bool"),
+    ("balance_sidebands", "Refine phase using resolved sidebands", "bool"),
     ("baseline", "Baseline correction", "bool"),
     ("masked_baseline", "Exclude main peak and sidebands from baseline", "bool"),
     ("baseline_degree", "Masked baseline degree (0 / 1 / 2)", "number"),
     ("baseline_exclusion", "Peak exclusion half-width (ppm)", "number"),
     ("baseline_anchor_min", "Baseline anchors: minimum distance from 4.5 ppm", "number"),
     ("sideband_spacing", "Approximate sideband spacing for exclusion (ppm)", "number"),
+    ("mas_hz", "MAS preset (Hz; both 0 = estimated spacing)", "number"),
+    ("proton_mhz", "1H frequency preset (MHz)", "number"),
     ("edge_fraction", "Baseline edge fraction (each end)", "number"),
     ("phase0_offset", "Additional zero-order phase (degrees)", "number"),
     ("phase1_deg", "First-order phase across range (degrees)", "number"),
@@ -230,9 +300,11 @@ class HPreprocessingDialog(tk.Toplevel):
         ttk.Button(left, text="Select all", command=lambda: self.set_active(True)).pack(fill="x", pady=3)
         ttk.Button(left, text="Clear selection", command=lambda: self.set_active(False)).pack(fill="x", pady=3)
         ttk.Button(left, text="Get preprocessing condition", command=self.get_condition).pack(fill="x", pady=8)
+        ttk.Button(left, text="400 MHz / 20 kHz preset", command=lambda: self.form.set_values(
+            {'mas_hz':20000.,'proton_mhz':400.,'sideband_spacing':50.})).pack(fill="x", pady=3)
         self.form = Fields(right, PREPROCESS_FIELDS, asdict(common_settings(workspace.spectra)))
         self.form.pack(fill="both", expand=True)
-        ttk.Label(self, text="No intensity normalization. Wide MAS exports: up to -200 to 210 ppm, bounded PH0/PH1 and outer, peak-excluded baseline; narrower exports retain central-band defaults.\n"
+        ttk.Label(self, text="Wide exports start with the editable lab preset: 400 MHz / 20 kHz = 50 ppm. This is not acquisition metadata read from ASCII. No intensity normalization.\n"
                   "Inspect Phase / baseline QC. Baseline anchors must be signal-free. PH1 uses the current processing span; manual PH0/PH1 overrides remain active for group preparation.",
                   wraplength=1080, padding=8).grid(row=1, column=0, sticky="ew")
         self.status = tk.StringVar(value="Activate sample and matching pristine core together. Applying prepares data in memory; Save to library retains it across launches.")
@@ -276,16 +348,22 @@ class HPreprocessingDialog(tk.Toplevel):
         except Exception as exc: self.status.set(str(exc))
 
 
-QUANT_SAMPLE = [("core", "Core", "text"), ("ligand", "Ligand / hypothetical ligand for blank check", "text"),
+QUANT_SAMPLE = [('model','Decomposition model',tuple(MODEL_LABELS)),
+                ("core", "Core", "text"), ("ligand", "Ligand / hypothetical ligand for blank check", "text"),
+                ("core_scaling", "Aromatic correction", ("aromatic_reference", "mass")),
                 ("sample_mass_mg", "Mass used as coverage denominator (mg)", "optional"),
                 ("reference_mass_mg", "Pristine reference mass (mg)", "optional"),
                 ("capacity_umol_mg", "Core maximum loading (umol/mg)", "number"),
                 ("molecular_weight", "Parent ligand MW (g/mol)", "number"),
                 ("effective_h", "H atoms represented per ligand (not particle mass)", "optional"),
-                ("sample_core_mass_mg", "Known core mass in sample (mg; blank = total mass approximation)", "optional"),
+                ('include_linkage_nh', 'Michael scenario includes one linkage N-H (if captured)', 'bool'),
+                ('schiff_h', 'Schiff H override (blank = automatic)', 'optional'),
+                ('michael_h', 'Michael H override (blank = automatic)', 'optional'),
+                ("sample_core_mass_mg", "Known core mass in sample (mg; mass method only)", "optional"),
                 ("use_prepared", "Use saved common preprocessing", "bool")]
-QUANT_CALIBRATION = [("standard_area", "Internal standard area", "number"),
-                     ("standard_mmol_h", "Internal standard amount (mmol H)", "number"),
+QUANT_CALIBRATION = [("show_provisional", "Show provisional coverage despite unresolved checks", "bool"),
+                     ("standard_area", "Internal standard area", "number"),
+                     ("standard_umol_h", "Internal standard amount (umol H)", "number"),
                      ("standard_basis", "Standard area basis", "basis"),
                      ("standard_grid_step", "STANDARD original grid step (ppm)", "optional"),
                      ("frequency_mhz", "Frequency (MHz, for Hz area)", "optional"),
@@ -294,7 +372,8 @@ QUANT_CALIBRATION = [("standard_area", "Internal standard area", "number"),
                      ("reference_response_factor", "Core response multiplier to standard scale", "number"),
                      ("calibration_verified", "Standard area unit and scale verified", "bool"),
                      ("acquisition_verified", "Quantitative acquisition / response verified", "bool")]
-DECOMPOSITION_FIELDS = [("fit_min", "Fit / component integration minimum (ppm)", "number"),
+DECOMPOSITION_FIELDS = [('model','Decomposition model',tuple(MODEL_LABELS)),
+                        ("fit_min", "Fit / component integration minimum (ppm)", "number"),
                         ("fit_max", "Fit / component integration maximum (ppm)", "number"),
                         ("aliphatic_min", "Aliphatic center lower bound (ppm)", "number"),
                         ("aliphatic_max", "Aliphatic center upper bound (ppm)", "number"),
@@ -303,6 +382,8 @@ DECOMPOSITION_FIELDS = [("fit_min", "Fit / component integration minimum (ppm)",
                         ("fwhm_min", "Minimum component FWHM (ppm)", "number"),
                         ("fwhm_max", "Maximum component FWHM (ppm)", "number"),
                         ("line_shape", "Component line shape", ("pseudo_voigt", "gaussian", "lorentzian")),
+                        ("aliphatic_gaussian_fraction", "Aliphatic G fraction (0=L, 1=G; blank=fit)", "optional"),
+                        ("aromatic_gaussian_fraction", "Aromatic G fraction (0=L, 1=G; blank=fit)", "optional"),
                         ("overlap_band", "Add unassigned overlap band between center ranges", "bool"),
                         ("sidebands", "Fit / integrate MAS spinning sidebands", "bool"),
                         ("sideband_order", "Maximum order on EACH side (1-4)", "number"),
@@ -311,8 +392,24 @@ DECOMPOSITION_FIELDS = [("fit_min", "Fit / component integration minimum (ppm)",
                         ("mas_hz", "Actual 1H MAS rate (Hz; 0 = unknown)", "number"),
                         ("proton_mhz", "Actual 1H frequency (MHz; 0 = unknown)", "number"),
                         ("sideband_width_scale", "Sideband / central FWHM multiplier (1 = DMfit link)", "number"),
-                        ("fit_sideband_width", "Fit common sideband-width multiplier", "bool")]
-QUANT_REGIONS = DECOMPOSITION_FIELDS + [("assignments_verified", "Component assignments, H count and core model reviewed", "bool"),
+                        ("fit_sideband_width", "Fit common sideband-width multiplier", "bool"),
+                        ("allow_negative_sidebands", "Signed satellite heights (diagnostic only)", "bool"),
+                        ('ligand_min','Legacy template ligand center lower bound (ppm)','number'),
+                        ('ligand_max','Legacy template ligand center upper bound (ppm)','number'),
+                        ('ligand_fwhm_min','Legacy template ligand minimum FWHM (ppm)','number'),
+                        ('ligand_fwhm_max','Legacy template ligand maximum FWHM (ppm)','number'),
+                        ('template_shift_max','Legacy template maximum core shift (ppm; 0 = fixed)','number'),
+                        ('template_broadening_max','Legacy template maximum extra core FWHM (ppm; 0 = none)','number'),
+                        ('unassigned_min','Ver2 broad unassigned center minimum (ppm)','number'),
+                        ('unassigned_max','Ver2 broad unassigned center maximum (ppm)','number'),
+                        ('unassigned_fwhm_min','Ver2 broad unassigned minimum FWHM (ppm)','number'),
+                        ('unassigned_fwhm_max','Ver2 broad unassigned maximum FWHM (ppm)','number'),
+                        ('complex_fit_min','Ver2 complex fitting minimum (ppm)','number'),
+                        ('complex_fit_max','Ver2 complex fitting maximum (ppm)','number'),
+                        ('joint_phase','Ver2 jointly refine automatic phase (manual overrides stay fixed)','bool'),
+                        ('joint_phase0_limit','Ver2 absolute PH0 limit (+/- degrees)','number'),
+                        ('joint_phase1_limit','Ver2 absolute PH1 limit (+/- degrees across processing span)','number')]
+QUANT_REGIONS = [row for row in DECOMPOSITION_FIELDS if row[0] != 'model'] + [("assignments_verified", "Component assignments, H count and core model reviewed", "bool"),
                         ("sideband_scope_verified", "Included orders, weak peaks, phase and baseline reviewed", "bool")]
 
 
@@ -333,7 +430,7 @@ class HDecompositionStyle:
         styles = self.sample.metadata.get("decomposition_styles", {})
         for i, (key, label, _, default) in enumerate(ROLES, 1):
             saved = styles.get(key, {})
-            variables = {"visible": tk.BooleanVar(value=saved.get("visible", True)),
+            variables = {"visible": tk.BooleanVar(value=saved.get("visible", default_visible(key))),
                          "width": tk.StringVar(value=saved.get("width") or ""),
                          "line_style": tk.StringVar(value=saved.get("line_style", default))}
             self.vars[key] = variables
@@ -343,10 +440,13 @@ class HDecompositionStyle:
             ttk.Combobox(form, textvariable=variables["line_style"], values=("-", "--", ":", "-."), state="readonly", width=8).grid(row=i, column=3)
         self.fill = tk.BooleanVar(value=self.sample.metadata.get("decomposition_fill", False))
         ttk.Checkbutton(parent, text="Shade fitted component areas", variable=self.fill).pack(anchor="w", pady=8)
+        self.notation = tk.StringVar(value=self.sample.metadata.get('intensity_notation', 'axis_label'))
+        ttk.Label(parent, text='Intensity numbers: axis_label = multiplier in axis title; plain = full numbers; scientific = top offset').pack(anchor='w')
+        ttk.Combobox(parent, textvariable=self.notation, values=('axis_label', 'plain', 'scientific'), state='readonly').pack(anchor='w', pady=5)
         self.error = ttk.Label(parent, foreground="#a00000"); self.error.pack(anchor="w")
 
     def variables(self):
-        return [v for row in self.vars.values() for v in row.values()]+([self.fill] if hasattr(self, 'fill') else [])
+        return [v for row in self.vars.values() for v in row.values()]+([self.fill, self.notation] if hasattr(self, 'fill') else [])
 
     def apply(self):
         if not self.vars: return
@@ -359,14 +459,15 @@ class HDecompositionStyle:
         except ValueError:
             self.error.configure(text="Width must be 0–20 or blank."); return
         self.error.configure(text="")
-        self.sample.metadata.update(decomposition_styles=styles, decomposition_fill=self.fill.get())
+        self.sample.metadata.update(decomposition_styles=styles, decomposition_fill=self.fill.get(), intensity_notation=self.notation.get())
         self.owner.plot.refresh()
 
     def restore_defaults(self):
         for key, _, _, default in ROLES:
             if key in self.vars:
-                self.vars[key]['visible'].set(True); self.vars[key]['width'].set(''); self.vars[key]['line_style'].set(default)
+                self.vars[key]['visible'].set(default_visible(key)); self.vars[key]['width'].set(''); self.vars[key]['line_style'].set(default)
         if hasattr(self, 'fill'): self.fill.set(False)
+        if hasattr(self, 'notation'): self.notation.set('axis_label')
         self.apply()
 
 
@@ -377,10 +478,21 @@ class HDecompositionDialog(tk.Toplevel):
         self.workspace, self.sample = workspace, sample
         self.processed = workspace.processed(sample); self.fit = None
         self.columnconfigure(0, weight=1); self.rowconfigure(1, weight=1)
-        ttk.Label(self, text="Fit the processed spectrum first. Center bounds guide assignment; component integrals include overlapping tails across the entire fit range. An optional middle band is excluded from ligand area.", wraplength=1220, padding=10).grid(row=0, column=0, sticky="ew")
+        top = ttk.Frame(self, padding=8); top.grid(row=0,column=0,sticky='ew'); top.columnconfigure(1,weight=1)
+        ttk.Label(top,text='Ver1: aliphatic/aromatic envelopes. Ver2: complex aliphatic + aromatic + broad unassigned families. Legacy template requires a pristine reference.',wraplength=1150).grid(row=0,column=0,columnspan=2,sticky='w')
+        ttk.Label(top,text='Legacy template reference').grid(row=1,column=0,sticky='w',pady=5)
+        self.reference = ttk.Combobox(top,state='readonly',values=[s.name for s in workspace.spectra],width=45)
+        self.reference.grid(row=1,column=1,sticky='ew',padx=8)
+        uid = sample.metadata.get('analysis_reference_uid') or sample.metadata.get('decomposition',{}).get('reference',{}).get('uid')
+        core,_ = infer_identity(sample.name)
+        candidates = [i for i,s in enumerate(workspace.spectra) if infer_identity(s.name)==(core,'')]
+        index = next((i for i in candidates if workspace.spectra[i].uid == uid),candidates[0] if candidates else None)
+        if index is not None: self.reference.current(index)
         panes = ttk.Panedwindow(self, orient='horizontal'); panes.grid(row=1, column=0, sticky='nsew')
         settings = decomposition_defaults(sample)
         self.form = Fields(panes, DECOMPOSITION_FIELDS, asdict(settings)); panes.add(self.form, weight=0)
+        self.form.vars['model'].trace_add('write',lambda *_: self.model_changed())
+        self.model_changed()
         self.form.canvas.configure(width=550)
         self.plot = PlotPane(panes, self.draw, PlotOptions('Chemical shift', 'ppm', 'Intensity', 'a.u.', reverse_x=True), compact=True, export_current_view=True)
         self.plot.vars['x_min'].set(str(settings.fit_min)); self.plot.vars['x_max'].set(str(settings.fit_max)); panes.add(self.plot, weight=1)
@@ -389,6 +501,7 @@ class HDecompositionDialog(tk.Toplevel):
         actions = ttk.Frame(self, padding=8); actions.grid(row=3, column=0, sticky='ew')
         ttk.Button(actions, text='Fit and preview', command=self.preview).pack(side='left', padx=4)
         ttk.Button(actions, text='MAS sideband defaults', command=self.sideband_defaults).pack(side='left', padx=4)
+        ttk.Button(actions, text='Component integrals...', command=lambda: HComponentDialog(self, self.fit) if self.fit else None).pack(side='left', padx=4)
         ttk.Button(actions, text='Phase / baseline QC...', command=workspace.quality).pack(side='left', padx=4)
         ttk.Button(actions, text='Apply decomposition to spectrum', command=self.apply).pack(side='left', padx=4)
         ttk.Button(actions, text='Close', command=self.destroy).pack(side='right')
@@ -396,22 +509,44 @@ class HDecompositionDialog(tk.Toplevel):
         self.plot.refresh()
 
     def sideband_defaults(self):
+        model = self.form.values()['model']
         settings = decomposition_defaults(self.sample, use_saved=False)
+        settings = select_model(settings, model)
         self.form.set_values(asdict(settings)); self.fit = None
         self.plot.vars['x_min'].set(str(settings.fit_min)); self.plot.vars['x_max'].set(str(settings.fit_max))
         self.plot.refresh()
-        self.status.set('Estimated spacing is a starting value. For old narrow preprocessing, use Preprocessing > Get preprocessing condition > Apply first. Enter actual MAS Hz / 1H MHz if known.')
+        self.status.set('DMfit link: sidebands share each central line width and G/L. Review the editable MAS/MHz preset. Reapply preprocessing when changing acquisition settings.')
 
     def draw(self, axis, options):
         draw_hnmr(axis, self.sample, self.processed, options, self.fit)
 
+    def model_changed(self):
+        modern = _model_fields([self.form])
+        self.reference.configure(state='readonly' if modern else 'disabled')
+        self.fit = None
+
+    def selected_reference(self, settings):
+        if settings.model != 'core_template': return None
+        index = self.reference.current()
+        if index < 0: raise ValueError('Load and select a pristine core reference for model Ver2.')
+        ref = self.workspace.spectra[index]
+        core,ligand = infer_identity(ref.name)
+        sample_core,_ = infer_identity(self.sample.name)
+        if ligand or (core and sample_core and core != sample_core):
+            raise ValueError('Select the matching pristine core, not a modified sample.')
+        return ref
+
     def preview(self):
         try:
-            self.fit = decompose(self.processed, DecompositionSettings(**self.form.values()))
+            self.processed = self.workspace.processed(self.sample)
+            settings = DecompositionSettings(**self.form.values())
+            ref = self.selected_reference(settings)
+            self.fit = decompose(self.processed, settings, self.workspace.processed(ref) if ref else None,
+                                  {'uid':ref.uid,'name':ref.name,'source':ref.source} if ref else None)
             self.plot.refresh()
             a = self.fit.areas
-            self.status.set(f"R2 = {self.fit.audit['fit_R2']:.6f} | Aliphatic area = {a['aliphatic']:.7g} | Aromatic area = {a['aromatic']:.7g} intensity*ppm\n"+
-                            ('; '.join(self.fit.warnings) if self.fit.warnings else 'Inspect residual and chemical assignments; high R2 alone does not establish a unique decomposition.'))
+            self.status.set(f"{MODEL_LABELS[settings.model]} | R2 = {self.fit.audit['fit_R2']:.6f} | "+' | '.join(f'{k} area = {v:.7g}' for k,v in a.items())+' intensity*ppm\n'+
+                            (f'{len(self.fit.warnings)} warning(s): open Component integrals / QC.' if self.fit.warnings else 'Inspect residual and chemical assignments; high R2 alone does not establish a unique decomposition.'))
         except Exception as exc: self.fit = None; self.plot.refresh(); self.status.set(str(exc))
 
     def apply(self):
@@ -419,8 +554,14 @@ class HDecompositionDialog(tk.Toplevel):
             settings = DecompositionSettings(**self.form.values()).validate()
             if self.fit is None or asdict(settings) != self.fit.audit['settings']:
                 raise ValueError('Fit and preview the current settings before applying.')
+            ref = self.selected_reference(settings)
+            if ref and ref.uid != self.fit.audit.get('reference',{}).get('uid'):
+                raise ValueError('Reference selection changed. Fit and preview again before applying.')
+            if restore_decomposition(self.workspace.processed(self.sample), self.fit.record(), self.workspace.processed(ref) if ref else None) is None:
+                raise ValueError('Processing changed. Fit and preview again before applying.')
             self.workspace.invalidate_all(fits=False)
             self.sample.metadata.update(decomposition=self.fit.record(), decomposition_settings=asdict(settings))
+            if ref: self.sample.metadata['analysis_reference_uid'] = ref.uid
             self.workspace.fits[self.sample.uid] = self.fit
             if settings.sidebands: self.workspace.set_view(settings.fit_min, settings.fit_max)
             self.workspace._refresh(); self.destroy()
@@ -454,20 +595,30 @@ class QuantDialog(tk.Toplevel):
         for label, specs in (("Sample and core", QUANT_SAMPLE), ("Calibration", QUANT_CALIBRATION), ("Regions and decomposition", QUANT_REGIONS)):
             form = Fields(book, specs, asdict(q)); self.forms.append(form); book.add(form, text=label)
         self.fields = {k: v for f in self.forms for k, v in f.vars.items()}
+        self.fields['model'].trace_add('write',lambda *_: _model_fields(self.forms))
+        _model_fields(self.forms)
         self.fields["core"].trace_add("write", self.core_changed)
         p = sample.processing
+        notes = ScrolledText(book,wrap='word',font='TkDefaultFont',height=8,padx=12,pady=12)
+        book.add(notes,text=tr('Model / calibration notes'))
+        notes.insert('1.0',"If saved preprocessing is unchecked, both spectra are freshly processed on a common default grid using the sample's phase/baseline switches.\n\n"
+                  "aromatic_reference: match aromatic H per mg to pristine core, then subtract core aliphatic H per mg. The sample mass cancels from coverage; reference mass remains.\n"
+                  "Ver2 jointly fits complex data and a broad unassigned family. Aromatic correction OFF uses entered masses; ON uses aromatic-reference normalization. Legacy core_reference uses measured core scaling. Schiff/Michael endpoints assume neutral single attachment; the optional +1 N-H must be captured. C-H-only counts are identical.\n"
+                  "Default standard: 42565812.55 intensity*ppm = 1.861273386 umol H. This is an editable working assumption; response multipliers default to 1.\n"
+                  "Turn off 'Show provisional coverage' in Calibration for reviewed-only mode. Negative and >100% estimates remain visible.\n\n"+REACTION_NOTE)
+        notes.configure(state='disabled')
         ttk.Label(self, text=f"Saved preprocessing: {'prepared, group '+p.get('group_id','')[:8] if p.get('prepared') else 'not prepared'}. "
-                  "If unchecked, both spectra are freshly processed on a common default grid using the sample's phase/baseline switches.\n"
-                  "Both spectra are decomposed with the same model. Core background uses entered masses; aromatic intensity is not a mass proxy.\n"
-                  "H per ligand is proton stoichiometry. Absolute coverage is withheld until calibration, acquisition and assignments are reviewed; component areas are always shown.",
-                  wraplength=980, padding=10).grid(row=3, column=0, sticky="ew")
+                  "Review H counts and calibration before calculating; assumptions are in Model / calibration notes.",
+                  wraplength=940, padding=10).grid(row=3, column=0, sticky='ew')
         self.status = tk.StringVar()
         ttk.Label(self, textvariable=self.status, foreground="#AE2C28", wraplength=980, padding=6).grid(row=4, column=0, sticky="ew")
         ttk.Button(self, text="Confirm parameters and calculate", command=self.calculate).grid(row=5, column=0, sticky="ew", padx=12, pady=10)
 
     def choose_reference(self, core):
         candidates = [i for i, s in enumerate(self.workspace.spectra) if infer_identity(s.name) == (core, "")]
-        if candidates: self.reference.current(candidates[0])
+        saved_uid = self.sample.metadata.get('analysis_reference_uid')
+        selected = next((i for i in candidates if self.workspace.spectra[i].uid == saved_uid), None)
+        if candidates: self.reference.current(selected if selected is not None else candidates[0])
         else: self.reference.set("")
 
     def core_changed(self, *_):
@@ -482,9 +633,10 @@ class QuantDialog(tk.Toplevel):
         name = self.presets[section].get()
         row = next(r for r in self.parameters[section] if r["name"] == name)
         if section == "cores": values = {"core": name, "capacity_umol_mg": row["capacity"]}
-        elif section == "ligands": values = {"ligand": name, "molecular_weight": row["mw"], "effective_h": row["effective_h"]}
+        elif section == "ligands": values = {"ligand": name, "molecular_weight": row["mw"], "effective_h": row["effective_h"],
+                                              'schiff_h':row.get('schiff_h'),'michael_h':row.get('michael_h')}
         else:
-            values = {k: row[v] for k, v in (("standard_area", "area"), ("standard_mmol_h", "mmol_h"),
+            values = {k: row[v] for k, v in (("standard_area", "area"), ("standard_umol_h", "umol_h"),
                       ("standard_basis", "basis"), ("standard_grid_step", "grid_step"),
                       ("frequency_mhz", "frequency_mhz"), ("calibration_verified", "verified"),
                       ("standard_includes_sidebands", "includes_sidebands"))}
@@ -501,13 +653,70 @@ class QuantDialog(tk.Toplevel):
             if (inferred and inferred != q.core) or ligand:
                 raise ValueError("Choose a matching pristine core reference. Its name currently identifies another core or a modified sample; rename it if necessary.")
             result = quantify(self.sample, ref, q)
-            self.sample.metadata["analysis_parameters"] = asdict(q)
-            self.sample.metadata["analysis_audit"] = result.audit
+            remember_result(self.sample, ref, q, result)
             self.workspace.results[self.sample.uid] = result
-            self.sample.metadata.update(decomposition=result.sample_fit.record(), decomposition_settings=result.sample_fit.audit["settings"])
             self.workspace.fits[self.sample.uid] = result.sample_fit
             self.workspace._refresh(); self.destroy()
         except Exception as exc: self.status.set(str(exc))
+
+
+class HBatchQuantDialog(tk.Toplevel):
+    """Review all sample-specific presets before computing the batch."""
+    def __init__(self, workspace):
+        super().__init__(workspace); _window(self, 'All H NMR provisional results', '1320x800')
+        self.workspace = workspace
+        self.plan = batch_plan(workspace.spectra, workspace.parameters.load())
+        self.rows = [summary_row(item) for item in self.plan]
+        self.columnconfigure(0, weight=1); self.rowconfigure(1, weight=1)
+        ttk.Label(self, text='Uses each sample\'s saved parameters or library defaults. Default assumptions: standard 42565812.55 intensity*ppm = 1.861273386 umol H; response multipliers 1.\n'
+            'Warnings do not hide estimates. Negative and >100% values are retained. Unknown numeric inputs still require entry. '
+            'Edit individual parameters in Quantitative analysis or the parameter library, then reopen this window.\n'
+            'Uses compatible saved preprocessing when available; otherwise recomputes a common grid for each sample/reference pair.',
+            wraplength=1230, padding=10).grid(row=0, column=0, sticky='ew')
+        frame, self.tree = _tree(self, [('sample','Sample',240),('reference','Reference',220),('mass','Mass mg',100),
+            ('basis','Std. basis',100),('response','Response S / R',150),('coverage','Coverage % (provisional)',240),
+            ('range','Coverage range % (H-count scenarios)',290),('model','Decomposition model',180),
+            ('loading','Loading umol/mg',170),('status','Status',410)], height=12)
+        frame.grid(row=1, column=0, sticky='nsew', padx=8)
+        self.status = tk.StringVar(value='Review the presets above, then calculate all loaded spectra.')
+        ttk.Label(self,textvariable=self.status,wraplength=1230,padding=8).grid(row=2,column=0,sticky='ew')
+        actions=ttk.Frame(self,padding=8);actions.grid(row=3,column=0,sticky='ew')
+        self.run_button=ttk.Button(actions,text='Confirm and calculate all',command=self.run);self.run_button.pack(side='left')
+        ttk.Button(actions,text='Export provisional results CSV...',command=self.export).pack(side='left',padx=8)
+        ttk.Button(actions,text='Close',command=self.destroy).pack(side='right')
+        self.refresh(); self.grab_set()
+
+    def refresh(self):
+        self.tree.delete(*self.tree.get_children())
+        for row in self.rows:
+            self.tree.insert('','end',values=(row['sample'],row['reference'],row['sample_mass_mg'],row['standard_basis'],
+                f"{row['response_factor']} / {row['reference_response_factor']}",
+                '' if row['apparent_coverage_percent'] is None else f"{row['apparent_coverage_percent']:.8g}",
+                '' if row['coverage_lower_percent'] is None else f"{row['coverage_lower_percent']:.8g} – {row['coverage_upper_percent']:.8g}",
+                row['decomposition_model'],'' if row['loading_umol_mg'] is None else f"{row['loading_umol_mg']:.8g}",row['status']))
+
+    def run(self):
+        self.run_button.configure(state='disabled')
+        self.workspace.invalidate_all(fits=False); self.rows=[]
+        completed=0
+        for i,item in enumerate(self.plan,1):
+            self.status.set(f'Calculating {i}/{len(self.plan)}: {item.sample.name}'); self.update_idletasks()
+            try:
+                if item.error: raise ValueError(item.error)
+                result=quantify(item.sample,item.reference,item.settings)
+                remember_result(item.sample,item.reference,item.settings,result)
+                self.workspace.results[item.sample.uid]=result
+                self.workspace.fits[item.sample.uid]=result.sample_fit
+                self.rows.append(summary_row(item,result)); completed+=1
+            except Exception as exc:
+                self.rows.append(summary_row(item,error=str(exc)))
+            self.refresh(); self.update_idletasks()
+        self.workspace._refresh()
+        self.status.set(f'{completed}/{len(self.plan)} numeric results. Select each sample in the main list to see its graph, areas and calculation details. Save spectra to library to retain parameters.')
+        self.run_button.configure(state='normal')
+
+    def export(self):
+        save_text(self,summary_csv(self.rows),'H_NMR_provisional_results.csv','.csv')
 
 
 class HLibraryWindow(tk.Toplevel):
@@ -565,17 +774,19 @@ class HLibraryWindow(tk.Toplevel):
 
 
 class HNMRTab(ttk.Frame):
-    def __init__(self, parent, library=None, parameters=None):
+    def __init__(self, parent, library=None, parameters=None, *, import_paths=None):
         from .ui import PlotPane
         super().__init__(parent)
         self.library = library or HNMRLibrary(); self.parameters = parameters or HNMRParameterLibrary()
+        self.import_paths = import_paths or self.add_paths
         self.spectra = []; self.results = {}; self.fits = {}; self.cache = {}; self.library_window = None; self.parameter_window = None
         panes = ttk.Panedwindow(self, orient="horizontal"); panes.pack(fill="both", expand=True)
         left = ttk.Frame(panes, padding=8, width=320); right = ttk.Frame(panes, padding=5)
         panes.add(left, weight=0); panes.add(right, weight=1)
         for label, command in (("Import H NMR ASCII...", self.add_dialog), ("Open H NMR library...", self.open_library),
                                ("Parameter library...", self.open_parameters), ("Preprocessing...", self.preprocessing),
-                               ("Decompose spectrum...", self.decompose_dialog), ("Quantitative analysis...", self.analyze)):
+                               ("Decompose spectrum...", self.decompose_dialog), ("Quantitative analysis...", self.analyze),
+                               ("Calculate all (provisional)...", self.analyze_all)):
             ttk.Button(left, text=tr(label), command=command).pack(fill="x", pady=3)
         actions = ttk.Frame(left); actions.pack(fill="x", pady=3)
         for label, command in (("Save to library", self.save), ("Rename...", self.rename), ("Remove", self.remove)):
@@ -606,17 +817,32 @@ class HNMRTab(ttk.Frame):
             ttk.Checkbutton(controls, text=tr(label), variable=var, command=command).pack(side="left", padx=4)
         ttk.Button(controls, text="Phase override...", command=self.phase_override).pack(side="left", padx=5)
         ttk.Button(controls, text="Phase / baseline QC...", command=self.quality).pack(side="left", padx=4)
+        ttk.Button(controls, text="Refine phase / baseline", command=self.refine_corrections).pack(side="left", padx=4)
+        ttk.Button(controls, text="Phase sensitivity...", command=self.stability).pack(side="left", padx=4)
+        ttk.Button(controls, text="Model sensitivity...", command=self.model_review).pack(side="left", padx=4)
         ttk.Button(controls, text="Main peak", command=lambda: self.set_view(-10,20)).pack(side="left", padx=4)
         ttk.Button(controls, text="Full sidebands", command=self.full_view).pack(side="left", padx=4)
         _wrap_controls(controls)
-        frame, self.result_tree = _tree(lower, [("metric", "Result / units", 280), ("value", "Value", 300)], height=4, selectmode="browse")
-        frame.pack(fill="both", expand=True)
-        buttons = ttk.Frame(lower); buttons.pack(side="bottom", before=frame, fill="x", pady=4)
-        ttk.Button(buttons, text="Calculation details...", command=self.audit).pack(side="left", padx=4)
+        frame, self.result_tree = _tree(lower, [("sample", "Sample", 210),
+            ("aromatic", "Aromatic ¹H (µmol/mg)", 180), ("aliphatic", "Aliphatic ¹H (µmol/mg)", 180),
+            ("coverage", "Ligand coverage (%)", 210)], height=4, selectmode="browse")
+        self.result_selection = SelectableTreeCells(self.result_tree, columns=('aromatic','aliphatic','coverage'))
+        lower.columnconfigure(0, weight=1); lower.rowconfigure(1, weight=1)
+        frame.grid(row=1, column=0, sticky='nsew')
+        buttons = ttk.Frame(lower); buttons.grid(row=2, column=0, sticky='ew', pady=4)
+        self.result_units = tk.StringVar(value=UNITS['h_per_mg'])
+        ttk.Label(buttons, text='Area display').pack(side='left', padx=4)
+        unit_box = ttk.Combobox(buttons, textvariable=self.result_units, values=tuple(UNITS.values()),state='readonly',width=28)
+        unit_box.pack(side='left',padx=4); unit_box.bind('<<ComboboxSelected>>', lambda _: self._refresh())
+        ttk.Button(buttons, text="More info...", command=self.audit).pack(side="left", padx=4)
         ttk.Button(buttons, text="Export processed CSV...", command=self.export_result).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Copy value", command=self.result_selection.copy_value).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Copy results table", command=self.result_selection.copy_table).pack(side="left", padx=4)
         self.result_status = tk.StringVar(value="Select a sample, then Quantitative analysis.")
         self.after_idle(lambda: localize_widget_tree(self))
-        ttk.Label(buttons, textvariable=self.result_status, wraplength=460, foreground="#9A3A14").pack(side="left", padx=8)
+        ttk.Label(lower, textvariable=self.result_status, foreground="#9A3A14", wraplength=650).grid(row=0, column=0, sticky='ew', pady=3)
+        _wrap_controls(buttons)
+        self.after_idle(lambda: vertical.sashpos(0, max(180, vertical.winfo_height()-245)))
 
     def selected(self):
         ids = self.tree.selection(); return [s for s in self.spectra if s.uid in ids]
@@ -625,7 +851,9 @@ class HNMRTab(ttk.Frame):
         return next(iter(self.selected()), None)
 
     def add_dialog(self):
-        self.add_paths(filedialog.askopenfilenames(parent=self, filetypes=[("Complex TopSpin ASCII", "*.txt *.asc")]))
+        self.import_paths(filedialog.askopenfilenames(parent=self,
+            title=tr('Import NMR ASCII (C / H auto-detect)'),
+            filetypes=[("TopSpin ASCII", "*.txt *.asc *.csv *.tsv")]))
 
     def add_paths(self, paths):
         spectra, errors = [], []
@@ -696,6 +924,10 @@ class HNMRTab(ttk.Frame):
 
     def preprocessing(self):
         if self.spectra: HPreprocessingDialog(self)
+        else: self.status.set("Import H NMR spectra first.")
+
+    def analyze_all(self):
+        if self.spectra: HBatchQuantDialog(self)
         else: self.status.set("Import H NMR spectra first.")
 
     def decompose_dialog(self):
@@ -772,6 +1004,33 @@ class HNMRTab(ttk.Frame):
         s=self.current()
         if s: HQualityDialog(self,s)
 
+    def refine_corrections(self):
+        s=self.current()
+        if not s:return
+        try:
+            if 'manual_phase0' in s.metadata or 'manual_phase1' in s.metadata:
+                raise ValueError('Manual phase override is active. Clear both phase overrides before automatic refinement.')
+            # Keep a prepared group's common grid/settings consistent.
+            group=s.processing.get('group_id')
+            targets=[v for v in self.spectra if group and v.processing.get('group_id')==group] if group else [s]
+            cfg=HNMRSettings(**s.processing['settings']) if s.processing else common_settings(targets)
+            cfg.phase=cfg.baseline=cfg.auto_phase1=cfg.masked_baseline=cfg.balance_sidebands=True
+            prepare_spectra(targets,cfg,prepared=bool(group))
+            self.invalidate_all(); self.refresh_rows(); self._refresh(); self.quality()
+        except Exception as exc:messagebox.showerror('Phase / baseline',str(exc),parent=self)
+
+    def stability(self):
+        s=self.current()
+        if s: HStabilityDialog(self,s)
+
+    def model_review(self):
+        s = self.current()
+        if s: HModelReviewDialog(self, s)
+
+    def component_details(self):
+        s=self.current(); fit=self.fitted(s) if s else None
+        if fit: HComponentDialog(self,fit)
+
     def processed(self, s):
         key = (s.uid, json.dumps(s.processing, sort_keys=True))
         if key not in self.cache:
@@ -799,27 +1058,49 @@ class HNMRTab(ttk.Frame):
                 self.status.set(f"{s.name}\n{len(s.x):,} complex points | PH0 = {(s.processing.get('phase0') or 0):.3g}, PH1 = {(s.processing.get('phase1') or 0):.3g} deg\n"+
                                 ("Common preprocessing prepared" if s.processing.get("prepared") else "Preview corrections; common preprocessing not prepared"))
             except Exception as exc: self.status.set(str(exc)); return
-        self.plot.refresh(); self.result_tree.delete(*self.result_tree.get_children())
+        self.plot.refresh(); self.result_selection.hide(); self.result_tree.delete(*self.result_tree.get_children())
         result = self.results.get(s.uid) if s else None
         fit = self.fitted(s) if s else None
-        if not result and not fit:
-            self.result_status.set("Decompose spectrum to inspect components before quantitative analysis."); return
-        values = result.values if result else decomposition_values(fit)
-        ordered = ["aliphatic_integral", "aromatic_integral", "aliphatic_aromatic_ratio", "aliphatic_signal_fraction_percent", "sample_fit_R2"]
-        if result: ordered += ["apparent_coverage_percent", "ligand_umol", "loading_umol_mg"]
-        for key in ordered+[k for k in values if k not in ordered]:
-            value = values[key]
-            self.result_tree.insert("", "end", values=(key.replace("_", " "), "Withheld / undefined" if value is None else f"{value:.10g}"))
-        self.result_status.set(result.quantitative_status if result else f"Decomposed signal areas; {len(fit.warnings)} warning(s), see QC/details. Signal fraction is not surface coverage.")
+        if s and fit and fit.audit.get('version') == 5:
+            self.status.set(f"{s.name}\n{len(s.x):,} complex points | Ver2 fitted display\nPH0 = {fit.audit['phase0_deg']:.4g}, PH1 = {fit.audit['phase1_deg']:.4g} deg\n"+
+                            ('Common preprocessing prepared' if s.processing.get('prepared') else 'Common preprocessing not prepared'))
+        units = next(k for k,v in UNITS.items() if v == self.result_units.get())
+        for key in ('aromatic','aliphatic'):
+            title = key.title()+(' ¹H (µmol/mg)' if units == 'h_per_mg' else ' integral (intensity·ppm)')
+            self.result_tree.heading(key,text=title)
+        for spectrum in self.spectra:
+            row_result = self.results.get(spectrum.uid)
+            row_fit = self.fitted(spectrum) if spectrum.uid == (s.uid if s else None) or spectrum.uid in self.fits else None
+            self.result_tree.insert('', 'end', iid=spectrum.uid, values=summary_cells(spectrum,row_result,row_fit,units))
+        if s and self.result_tree.exists(s.uid):
+            self.result_tree.selection_set(s.uid); self.result_tree.see(s.uid)
+        _fit_table_values(self.result_tree)
+        self.result_status.set(short_status(result,fit)+'\nH/mg values precede aromatic normalization. Coverage range: Schiff/Michael H-count scenarios.')
 
     def audit(self):
         s = self.current(); result = self.results.get(s.uid) if s else None
         fit = self.fitted(s) if s else None
         content = result.audit if result else json.dumps(fit.audit, indent=2, ensure_ascii=False) if fit else None
         if not content: return
-        dialog = tk.Toplevel(self); _window(dialog, "H NMR calculation details")
-        ttk.Button(dialog, text="Save complete calculation record...", command=lambda: save_text(dialog, content, "H_NMR_calculation.txt")).pack(anchor="w", padx=8, pady=8)
-        text = ScrolledText(dialog, wrap="word", font=("TkFixedFont", 10)); text.pack(fill="both", expand=True, padx=8, pady=8)
+        dialog = tk.Toplevel(self); _window(dialog, "H NMR additional information")
+        buttons = ttk.Frame(dialog, padding=8); buttons.pack(fill='x')
+        ttk.Button(buttons, text="Save complete calculation record...", command=lambda: save_text(dialog, content, "H_NMR_calculation.txt")).pack(side='left',padx=4)
+        ttk.Button(buttons, text="Component integrals...", command=lambda: HComponentDialog(dialog,fit)).pack(side='left',padx=4)
+        book = ttk.Notebook(dialog); book.pack(fill='both',expand=True,padx=8,pady=8)
+        values_page = ttk.Frame(book); book.add(values_page,text='All values')
+        frame, tree = _tree(values_page, [('metric','Result / units',480),('value','Value',280)])
+        frame.pack(fill='both',expand=True)
+        values = result.values if result else decomposition_values(fit)
+        for key,value in values.items(): tree.insert('', 'end', values=(key.replace('_',' '),number(value)))
+        _fit_table_values(tree)
+        selection = SelectableTreeCells(tree,columns=('value',)); dialog.value_selection = selection
+        ttk.Button(values_page,text='Copy all values',command=selection.copy_table).pack(anchor='w',pady=6)
+        warnings = ScrolledText(book,wrap='word',font='TkDefaultFont'); book.add(warnings,text='Assumptions / diagnostics')
+        warning_text = short_status(result,fit)+'\n\n'+'\n\n'.join(result.warnings if result else fit.warnings)
+        if fit.audit.get('version') == 5:
+            warning_text += f"\n\nJoint phase: PH0 = {fit.audit['phase0_deg']:.8g}°, PH1 = {fit.audit['phase1_deg']:.8g}° (pivot {fit.audit['phase_pivot_ppm']:g} ppm; span {fit.audit['phase_span_ppm']:g} ppm).\nBroad unassigned integral = {fit.areas['unassigned']:.12g} intensity·ppm; excluded from coverage."
+        warnings.insert('1.0',warning_text); warnings.configure(state='disabled')
+        text = ScrolledText(book, wrap="word", font=("TkFixedFont", 10)); book.add(text,text='Full calculation record')
         text.insert("1.0", content); text.configure(state="disabled")
 
     def export_result(self):
@@ -828,21 +1109,175 @@ class HNMRTab(ttk.Frame):
         if result or fit: save_text(self, result_csv(result) if result else decomposition_csv(fit), "H_NMR_decomposition.csv", ".csv")
 
 
+class HModelReviewDialog(tk.Toplevel):
+    def __init__(self, workspace, sample):
+        super().__init__(workspace)
+        _window(self, 'H NMR model sensitivity', '1250x760')
+        self.workspace, self.sample, self.report = workspace, sample, None
+        self.columnconfigure(0, weight=1); self.rowconfigure(2, weight=1)
+        ttk.Label(self, text='Compare line shapes on the same corrected spectrum. This review does not replace the current decomposition. '
+            'An added overlap component can improve R2 without identifying a chemical group. Areas include all selected sidebands.',
+            wraplength=1150, padding=10).grid(row=0, column=0, sticky='ew')
+        frame, self.tree = _tree(self, [('model','Model',220), ('ali','Aliphatic area',180),
+            ('aro','Aromatic area',180), ('unassigned','Unassigned area',170), ('fraction','Aliphatic / all (%)',165), ('r2','R2',120)], height=6)
+        frame.grid(row=1, column=0, sticky='nsew', padx=10)
+        self.selection = SelectableTreeCells(self.tree)
+        self.details = ScrolledText(self, wrap='word', height=12)
+        self.details.grid(row=2, column=0, sticky='nsew', padx=10, pady=8)
+        row = ttk.Frame(self, padding=8); row.grid(row=3, column=0, sticky='ew')
+        ttk.Button(row, text='Run model comparison', command=self.run).pack(side='left', padx=4)
+        ttk.Button(row, text='Copy comparison', command=self.selection.copy_table).pack(side='left', padx=4)
+        ttk.Button(row, text='Save review...', command=self.save).pack(side='left', padx=4)
+        self.status = tk.StringVar(value='Ready.'); ttk.Label(row, textvariable=self.status).pack(side='left', padx=8)
+
+    def run(self):
+        from .hnmr_model_review import model_review
+        self.status.set('Comparing models...'); self.update_idletasks()
+        try:
+            result = self.workspace.results.get(self.sample.uid)
+            processed = result.sample if result else self.workspace.processed(self.sample)
+            fit = self.workspace.fitted(self.sample)
+            settings = DecompositionSettings(**fit.audit['settings']) if fit else decomposition_defaults(self.sample)
+            reference = None
+            if settings.model == 'core_template':
+                from .hnmr_template import template_processed
+                if not fit: raise ValueError('Fit model Ver2 with its pristine reference before reviewing sensitivity.')
+                reference = template_processed(fit.audit)
+            self.report = model_review(processed, settings, reference,
+                                       fit.audit.get('reference') if fit else None,
+                                       fit.audit.get('fixed_core_scale') if fit else None)
+            modern = settings.model == 'core_template'
+            for key,text in (('ali','Ligand area' if modern else 'Aliphatic area'),('aro','Core template area' if modern else 'Aromatic area'),
+                             ('fraction','Ligand / all (%)' if modern else 'Aliphatic / all (%)')):
+                self.tree.heading(key,text=text)
+            self.selection.hide(); self.tree.delete(*self.tree.get_children())
+            for row in self.report['rows']:
+                values = [row['model']]+[f'{row[k]:.12g}' if row.get(k) is not None else '' for k in
+                    (('ligand_integral','core_template_integral','unassigned_integral','ligand_fraction_of_all_components_percent','fit_R2') if modern else
+                     ('aliphatic_integral','aromatic_integral','unassigned_integral','aliphatic_fraction_of_all_components_percent','fit_R2'))]
+                self.tree.insert('', 'end', values=values)
+            _fit_table_values(self.tree)
+            text = self.report['note']+'\n\n'+'\n\n'.join(row['model']+':\n'+
+                ('ERROR: '+row['error'] if 'error' in row else '\n'.join(row['warnings']) or 'No numerical warnings.') for row in self.report['rows'])
+            self.details.configure(state='normal'); self.details.delete('1.0','end'); self.details.insert('1.0', text); self.details.configure(state='disabled')
+            self.status.set('Review complete; current decomposition unchanged.')
+        except Exception as exc: self.status.set(str(exc))
+
+    def save(self):
+        if self.report:
+            save_text(self, json.dumps(self.report, indent=2, ensure_ascii=False), 'H_NMR_model_review.json', '.json')
+
+
+class HComponentDialog(tk.Toplevel):
+    """DMfit-style line accounting with explicit finite / infinite domains."""
+    def __init__(self, parent, fit):
+        super().__init__(parent); _window(self, 'H NMR component integrals', '1230x760')
+        self.columnconfigure(0, weight=1); self.rowconfigure(1, weight=3); self.rowconfigure(2, weight=1)
+        a=fit.audit
+        ttk.Label(self, text=f"Measured-domain integration: {a['area_domain_ppm'][0]:g} to {a['area_domain_ppm'][1]:g} ppm, intensity*ppm.\n"
+                  "Family area = central + all included +/- orders. G fraction: 1 = Gaussian, 0 = Lorentzian. Full-profile area extrapolates tails to infinity.",
+                  padding=8, wraplength=1150).grid(row=0, column=0, sticky='ew')
+        frame,self.tree=_tree(self, [('family','Family',130),('order','Order',70),('center','Center ppm',110),
+            ('width','FWHM ppm',110),('gauss','G fraction',100),('area','Finite area',155),
+            ('full','Full-profile area',155),('percent','Finite total %',125)], height=11)
+        frame.grid(row=1,column=0,sticky='nsew',padx=8)
+        self.cell_selection = SelectableTreeCells(self.tree)
+        lines=a.get('lines') or [{'family':k,'order':0,'parameters':v,'area':fit.areas[k]} for k,v in a['parameters'].items()]
+        if a.get('version') == 4:
+            self.tree.insert('','end',values=('core_template','measured','','','',f"{fit.areas['core_template']:.10g}",'',''))
+        total=sum(fit.areas.values())
+        for line in lines:
+            amp,c,w,eta=line['parameters']
+            full=line.get('full_profile_area',amp*w*((1-eta)*np.sqrt(np.pi)/(2*np.sqrt(np.log(2)))+eta*np.pi/2))
+            self.tree.insert('','end',values=(line['family'],f"{line['order']:+d}",f'{c:.6g}',f'{w:.6g}',f'{1-eta:.6g}',
+                f"{line['area']:.10g}",f'{full:.10g}',f"{100*line['area']/total:.5f}" if total else 'undefined'))
+        for family, area in fit.areas.items():
+            self.tree.insert('','end',values=(family,'SUM','','','',f'{area:.10g}',
+                f"{a.get('full_profile_areas',{}).get(family,0):.10g}" if family in a.get('full_profile_areas',{}) else '',
+                f'{100*area/total:.5f}' if total else 'undefined'))
+        _fit_table_values(self.tree)
+        warnings=ScrolledText(self,height=5,wrap='word');warnings.grid(row=2,column=0,sticky='nsew',padx=8,pady=6)
+        warnings.insert('1.0','\n'.join(fit.warnings) or 'Review line assignments and phase/baseline; a good fit alone does not validate surface coverage.')
+        warnings.configure(state='disabled')
+        ttk.Button(self,text='Save complete calculation record...',command=lambda:save_text(self,json.dumps(a,indent=2,ensure_ascii=False),'H_NMR_components.json','.json')).grid(row=3,column=0,sticky='w',padx=8,pady=8)
+
+
+class HStabilityDialog(tk.Toplevel):
+    def __init__(self, workspace, sample):
+        super().__init__(workspace);_window(self,'H NMR phase sensitivity','1220x820')
+        self.workspace,self.sample,self.report=workspace,sample,None
+        self.columnconfigure(0,weight=1);self.rowconfigure(2,weight=1)
+        top=ttk.Frame(self,padding=8);top.grid(row=0,column=0,sticky='ew')
+        ttk.Label(top,text='Reference spectrum').grid(row=0,column=0,sticky='w')
+        self.reference=ttk.Combobox(top,state='readonly',values=['None (single spectrum)']+[s.name for s in workspace.spectra],width=40)
+        self.reference.grid(row=0,column=1,sticky='ew',padx=8)
+        core,_=infer_identity(sample.name)
+        index=next((i+1 for i,s in enumerate(workspace.spectra) if infer_identity(s.name)==(core,'')),0)
+        self.reference.current(index)
+        q=quant_defaults(sample,workspace.parameters.load())
+        self.form=Fields(self,[('phase_step','PH0 perturbation (+/- degrees)','number'),
+                              ('sample_mass','Sample mass (mg)','number'),('reference_mass','Reference mass (mg)','number'),
+                              ('sample_response','Sample response multiplier','number'),('reference_response','Reference response multiplier','number')],
+                         {'phase_step':2.,'sample_mass':q.sample_mass_mg,'reference_mass':q.reference_mass_mg,
+                          'sample_response':q.response_factor,'reference_response':q.reference_response_factor})
+        self.form.grid(row=1,column=0,sticky='ew')
+        frame,self.tree=_tree(self,[('name','Spectrum',230),('phase','PH0 offset',100),('ali','Aliphatic area',155),
+            ('aro','Aromatic area',155),('mg','Aliphatic / mg',155),('fraction','Aliphatic %',125),('r2','Fit R2',105)],height=7)
+        frame.grid(row=2,column=0,sticky='nsew',padx=8)
+        self.status=tk.StringVar(value='Refits PH0 -step / 0 / +step with fixed PH1 and recomputed baseline. Neither sample names nor expected ordering constrain the fit.')
+        ttk.Label(self,textvariable=self.status,wraplength=1140,padding=8).grid(row=3,column=0,sticky='ew')
+        actions=ttk.Frame(self,padding=8);actions.grid(row=4,column=0,sticky='ew')
+        self.run_button=ttk.Button(actions,text='Run phase sensitivity',command=self.run);self.run_button.pack(side='left')
+        ttk.Button(actions,text='Export sensitivity record...',command=self.export).pack(side='left',padx=8)
+
+    def run(self):
+        from .hnmr_stability import phase_sensitivity
+        self.run_button.configure(state='disabled');self.status.set('Running phase sensitivity...');self.update_idletasks()
+        try:
+            values=self.form.values();index=self.reference.current()
+            reference=self.workspace.spectra[index-1] if index>0 else None
+            result=phase_sensitivity(self.sample,reference,settings=decomposition_defaults(self.sample),**values)
+            self.report=result;self.tree.delete(*self.tree.get_children())
+            modern = result['decomposition']['model'] == 'core_template'
+            for key,text in (('phase','PH0 S / R' if modern else 'PH0 offset'),('ali','Ligand area' if modern else 'Aliphatic area'),
+                             ('aro','Core template area' if modern else 'Aromatic area'),('mg','Ligand ref. area / mg' if modern else 'Aliphatic / mg'),
+                             ('fraction','Ligand %' if modern else 'Aliphatic %')):
+                self.tree.heading(key,text=text)
+            for row in result['rows']:
+                phase = f"{row['phase_offset_deg']:+g}" + (f" / {row['reference_phase_offset_deg']:+g}" if modern else '')
+                keys = ('ligand_area','core_template_area','ligand_reference_area_per_mg','ligand_fraction_percent','fit_R2') if modern else ('aliphatic_area','aromatic_area','aliphatic_per_mg','aliphatic_fraction_percent','fit_R2')
+                self.tree.insert('','end',values=(row['sample'],phase,
+                    *[f'{row[k]:.8g}' if row[k] is not None else 'undefined' for k in keys]))
+            _fit_table_values(self.tree)
+            message='; '.join(k.replace('_',' ')+': '+v['ordering'] for k,v in result.get('comparison',{}).items())
+            self.status.set((message+'\n' if message else '')+'Diagnostic sensitivity only; not confidence intervals or validated coverage. Full warnings are in the exported record.')
+        except Exception as exc:self.report=None;self.status.set(str(exc))
+        finally:self.run_button.configure(state='normal')
+
+    def export(self):
+        if self.report:save_text(self,json.dumps(self.report,indent=2,ensure_ascii=False,allow_nan=False),'H_NMR_phase_sensitivity.json','.json')
+
+
 class HQualityDialog(tk.Toplevel):
     """Visible correction trace and envelope QC; never treats height equality as phase proof."""
     def __init__(self, workspace, sample):
         from .ui import PlotPane
         super().__init__(workspace); _window(self, 'H NMR phase / baseline / sideband QC', '1330x930')
         self.sample=sample; self.processed=workspace.processed(sample)
-        p=self.processed; fit=workspace.fitted(sample)
-        diagnostic=fit.audit.get('sideband_diagnostics',{}) if fit else p.audit.get('sideband_diagnostics',{})
+        p=self.processed; fit=workspace.fitted(sample); self.fit=fit
+        diagnostic=(fit.audit.get('sideband_diagnostics') if fit else p.audit.get('sideband_diagnostics')) or {}
         body=ttk.Panedwindow(self,orient='vertical');body.pack(fill='both',expand=True)
         top=ttk.Frame(body);bottom=ttk.Frame(body);body.add(top,weight=3);body.add(bottom,weight=2)
         self.plot=PlotPane(top,self.draw,PlotOptions('Chemical shift','ppm','Intensity','a.u.',reverse_x=True),compact=True,export_current_view=True)
         self.plot.vars['x_min'].set(str(p.x[0]));self.plot.vars['x_max'].set(str(p.x[-1]));self.plot.pack(fill='both',expand=True)
-        note=(f"PH0 {p.audit['auto_phase0_deg']:.3f} deg; PH1 {p.audit.get('auto_phase1_deg',0):.3f} deg across {p.x[-1]-p.x[0]:g} ppm. "
+        note=(f"Preprocessing PH0 {p.audit['auto_phase0_deg']:.3f} deg; PH1 {p.audit.get('auto_phase1_deg',0):.3f} deg across {p.x[-1]-p.x[0]:g} ppm. "
               f"Pivot {p.audit['phase_pivot_ppm']:g} ppm. Detected sideband envelopes: {diagnostic.get('detected_sideband_envelopes','n/a')}.\n"
               "Positions follow a common spacing; +/- heights need not be equal. Weak outer peaks remain uncertain. Peak count alone does not establish aliphatic/aromatic assignment.")
+        if fit and fit.audit.get('version') == 5:
+            note += f"\nDisplayed Ver2 fit: PH0 {fit.audit['phase0_deg']:.4g}, PH1 {fit.audit['phase1_deg']:.4g} deg (same pivot/span); see the Ver2 corrected trace."
+        refinement=p.audit.get('phase_diagnostics',{}).get('sideband_refinement')
+        if refinement:
+            note+='\nSideband refinement: '+refinement['reason']
         ttk.Label(bottom,text=note,wraplength=1250,padding=8).pack(fill='x')
         frame, self.tree=_tree(bottom,[('order','Order',70),('status','Envelope status',240),('ppm','Peak ppm',110),
             ('snr','Prominence / noise',150),('neg','Negative fraction',150),('error','Local RMSE / peak',160),
@@ -877,6 +1312,11 @@ class HQualityDialog(tk.Toplevel):
             ('baseline','Subtracted baseline',p.baseline,'#c00000','--')):
             color=curve_color(axis,s.uid+':qc:'+key,label,default,colors,key)
             axis.plot(p.x,y,color=color,lw=options.line_width,ls=style,label=label)
+        if self.fit and self.fit.audit.get('version') == 5:
+            from .hnmr_family import corrected_complex
+            y=corrected_complex(p,self.fit.audit).real
+            color=curve_color(axis,s.uid+':qc:ver2','Ver2 corrected real','#401f68',colors,'ver2')
+            axis.plot(p.x,y,color=color,lw=options.line_width,label='Ver2 corrected real')
         axis.axhline(0,color='#006c31',lw=.6,ls=':')
         # PlotPane applies common axes, legend and export settings after drawing.
 
@@ -885,7 +1325,8 @@ class NMRWorkspace(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         self.book = ttk.Notebook(self)
-        self.c = SSNMRTab(self.book); self.h = HNMRTab(self.book)
+        self.c = SSNMRTab(self.book, import_paths=self.add_paths)
+        self.h = HNMRTab(self.book, import_paths=self.add_paths)
         self.book.add(self.c, text="C NMR"); self.book.add(self.h, text="H NMR")
         self.book.pack(fill="both", expand=True)
         self.plot = self.c.plot; self.plot_panes = (self.c.plot, self.h.plot)
@@ -894,8 +1335,23 @@ class NMRWorkspace(ttk.Frame):
         self.c._refresh(); self.h._refresh()
 
     def add_paths(self, paths):
+        loaded = {self.c: [], self.h: []}
+        errors = []
+        last_target = None
         for path in paths:
-            text = Path(path).read_text(encoding="utf-8-sig")
-            h = ("LEFT" in text and "RIGHT" in text and "SIZE" in text) or text.lstrip().lower().startswith("ppm real imag")
-            target = self.h if h else self.c
-            target.add_paths([path]); self.book.select(target)
+            try:
+                spectrum = parse_nmr_ascii(path)
+                target = self.h if isinstance(spectrum, HNMRSpectrum) else self.c
+                if target is self.h:
+                    preview_spectrum(spectrum)
+                loaded[target].append(spectrum)
+                last_target = target
+            except Exception as exc:
+                errors.append(f"{Path(path).name}: {exc}")
+        for target, spectra in loaded.items():
+            if spectra:
+                target.add_spectra(spectra)
+        if last_target is not None:
+            self.book.select(last_target)
+        if errors:
+            messagebox.showerror(tr('NMR ASCII import'), '\n'.join(errors), parent=self)

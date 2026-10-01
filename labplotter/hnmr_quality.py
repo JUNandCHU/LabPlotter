@@ -9,6 +9,16 @@ from scipy.optimize import minimize
 from scipy.signal import find_peaks
 
 
+# Editable lab preset supplied by the user; not recovered acquisition metadata.
+LAB_PROTON_MHZ = 400.
+LAB_MAS_HZ = 20000.
+
+
+def instrument_preset(spectrum):
+    saved = spectrum.metadata.get('acquisition', {})
+    return float(saved.get('mas_hz', LAB_MAS_HZ)), float(saved.get('proton_mhz', LAB_PROTON_MHZ))
+
+
 def noise_sigma(y):
     y = np.asarray(y)
     if len(y) < 4: return 0.
@@ -66,7 +76,7 @@ def masked_baseline(x, y, spacing, half_width=20., degree=2, anchor_min=0.):
                    'spacing_ppm':float(spacing), 'anchor_RMS':float(np.sqrt(np.mean((y[keep]-curve[keep])**2)))}
 
 
-def phase_zero_first(x, z, start_phase, spacing, half_width=20., degree=2, anchor_min=0.):
+def phase_zero_first(x, z, start_phase, spacing, half_width=20., degree=2, anchor_min=0., balance_sidebands=False):
     """Bounded ACME-style 0/1-order phase, with masked-baseline diagnostics.
 
     Does not minimize differences between +/- sideband amplitudes. First order
@@ -98,10 +108,88 @@ def phase_zero_first(x, z, start_phase, spacing, half_width=20., degree=2, ancho
                               'candidate_phase1':float(best.x[1]),'warnings':warnings}
     if best.fun >= score([start_phase,0.]):
         return start_phase,0.,{'method':'zero-order fallback; no objective improvement','warnings':[]}
-    return float((best.x[0]+180)%360-180),float(best.x[1]),{
+    selected = best.x
+    refinement = None
+    if balance_sidebands:
+        selected, refinement = refine_sideband_phase(xx, zz, best.x, spacing, half_width, degree, anchor_min)
+        warnings += refinement['warnings']
+    return float((selected[0]+180)%360-180),float(selected[1]),{
         'method':'bounded zero/first-order entropy + negative energy; peak-excluded baseline',
-        'objective_before':score([start_phase,0.]),'objective_after':float(best.fun),
+        'objective_before':score([start_phase,0.]),'objective_after':score(selected),
+        'sideband_refinement':refinement,
         'pivot_ppm':pivot,'span_ppm':span,'warnings':warnings}
+
+
+def refine_sideband_phase(x, z, initial, spacing, half_width=20., degree=1, anchor_min=145.):
+    """Bounded, noise-aware per-envelope refinement of an existing PH0/PH1.
+
+    A global negative-energy score can ignore weak satellites. Each resolved
+    envelope contributes here relative to its OWN fixed complex energy. One
+    global linear phase is fitted; no peak-wise rotations, sign flipping,
+    equal +/- heights or specimen/ligand names enter the objective. Baseline
+    anchors are refitted at each trial. This is a proposal, not a guarantee of
+    purely absorptive lines (pulse/dead-time/background errors can remain).
+    """
+    x, z, initial = np.asarray(x), np.asarray(z), np.asarray(initial, dtype=float)
+    u=(x-(x[0]+x[-1])/2)/(x[-1]-x[0])
+    central=abs(x-4.5)<min(22., spacing*.42)
+    off=signal_free_mask(x,spacing,half_width) & (abs(x-4.5)>=anchor_min)
+    noise=max(noise_sigma(z.real[off]),noise_sigma(z.imag[off]),float(max(abs(z)))*1e-5)
+    magnitude=gaussian_filter1d(abs(z),max(.15/np.median(np.diff(x)),.5))
+    windows=[]; orders=[]
+    for order in (-2,-1,1,2):
+        center=4.5+order*spacing; half=min(22.,spacing*.42)
+        mask=abs(x-center)<=half
+        if x[0]>center-half or x[-1]<center+half or mask.sum()<12: continue
+        _, peaks=find_peaks(magnitude[mask],prominence=max(5*noise,max(magnitude)*.0005))
+        if len(peaks['prominences']): windows.append(mask); orders.append(order)
+    def corrected(v):
+        y=(z*np.exp(1j*np.deg2rad(v[0]+v[1]*u))).real
+        base,_=masked_baseline(x,y,spacing,half_width,degree,anchor_min)
+        return y-base
+    before=corrected(initial)
+    energies=[float(np.sum(abs(z[m])**2))+1e-30 for m in windows]
+    def negative(y):
+        return float(np.mean([np.sum(np.minimum(y[m]+3*noise,0)**2)/energy
+                              for m,energy in zip(windows,energies)])) if windows else 0.
+    initial_negative=negative(before)
+    report={'enabled':True,'accepted':False,'resolved_orders':orders,
+            'phase0_before':float(initial[0]),'phase1_before':float(initial[1]),
+            'negative_score_before':initial_negative,'negative_score_after':initial_negative,
+            'phase0_bound_deg':5.,'phase1_bound_deg':60.,'warnings':[]}
+    if not windows or initial_negative<1e-8:
+        report['reason']='No resolved negative satellite signal above the noise threshold.'
+        return initial,report
+    energy=float(np.sum(before**2))+1e-30
+    central_area=float(np.sum(np.maximum(before[central],0)))
+    initial_cneg=float(np.sum(np.minimum(before[central],0)**2)/energy)
+    def score(v):
+        y=corrected(v)
+        # Keep the main envelope close while allowing weak sidebands to matter.
+        change=np.sum((y[central]-before[central])**2)/energy
+        delta=(v-initial)/np.array([5.,60.])
+        return 10*negative(y)+change+.002*float(np.sum(delta**2))
+    bounds=[(initial[0]-5.,initial[0]+5.),(max(-170.,initial[1]-60.),min(170.,initial[1]+60.))]
+    fits=[minimize(score,[initial[0],np.clip(initial[1]+d,*bounds[1])],method='Nelder-Mead',bounds=bounds,
+                   options={'maxiter':180,'xatol':.01,'fatol':1e-9}) for d in (-30.,0.,30.)]
+    candidates=[f for f in fits if f.success and np.isfinite(f.fun)]
+    if not candidates:
+        report['reason']='Refinement did not converge; retained initial correction.'
+        return initial,report
+    best=min(candidates,key=lambda f:f.fun);after=corrected(best.x)
+    ratio=float(np.sum(np.maximum(after[central],0))/(central_area+1e-30))
+    cneg=float(np.sum(np.minimum(after[central],0)**2)/energy)
+    accepted=bool(best.fun<score(initial) and negative(after)<initial_negative*.98 and
+                  .9<=ratio<=1.1 and cneg<=max(initial_cneg*1.25,1e-4))
+    report.update(accepted=accepted,candidate_phase0=float(best.x[0]),candidate_phase1=float(best.x[1]),
+                  candidate_negative_score=negative(after),central_positive_area_ratio=ratio,
+                  reason='Reduced resolved-satellite negative energy with central-envelope guard.' if accepted
+                  else 'No acceptable improvement; retained initial correction.')
+    if accepted:
+        report['negative_score_after']=negative(after)
+        if any(abs(best.x[i]-b)<.1 for i in (0,1) for b in bounds[i]):
+            report['warnings'].append('Sideband phase refinement reached a bound; inspect the candidate and remaining negative lobes.')
+    return best.x if accepted else initial,report
 
 
 def sideband_diagnostics(x, y, spacing, max_order=2, snr_threshold=5., center=4.5, anchor_min=0.):

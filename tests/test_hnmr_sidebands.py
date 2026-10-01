@@ -19,7 +19,8 @@ def mas_fixture(name='PDA-C6', extra=0., complex_data=False):
         for n,amp in zip(range(-2,3),amps):
             y += profile(x,amp,center+n*55,width,0.)
             imaginary += amp*2/np.sqrt(np.pi)*dawsn(2*np.sqrt(np.log(2))*(x-center-n*55)/width)
-    return HNMRSpectrum(name,x,y,imaginary if complex_data else np.zeros_like(x)).validate()
+    return HNMRSpectrum(name,x,y,imaginary if complex_data else np.zeros_like(x),
+                       metadata={'acquisition':{'mas_hz':22000.,'proton_mhz':400.}}).validate()
 
 
 class SidebandTests(unittest.TestCase):
@@ -103,11 +104,11 @@ class SidebandTests(unittest.TestCase):
         old['standards'][0]['name']='Other standard';self.assertFalse(validate_parameters(old)['standards'][0]['includes_sidebands'])
         s=mas_fixture();q=quant_defaults(s,params)
         self.assertTrue(q.sidebands);self.assertTrue(q.standard_includes_sidebands);self.assertFalse(q.calibration_verified)
-        self.assertEqual(q.standard_area,42565812.55);self.assertEqual(q.standard_mmol_h,1.861273386)
+        self.assertEqual(q.standard_area,42565812.55);self.assertEqual(q.standard_umol_h,1.861273386)
         from test_hnmr import fixture
         a,b=fixture('PDA-C6',40),fixture()
         prepare_spectra([a,b],replace(common_settings([a,b]),phase=False,baseline=False))
-        q=QuantSettings(line_shape='gaussian',standard_includes_sidebands=True,
+        q=QuantSettings(line_shape='gaussian',standard_includes_sidebands=True,show_provisional=False,
             calibration_verified=True,acquisition_verified=True,assignments_verified=True)
         result=quantify(a,b,q)
         self.assertIsNone(result.values['apparent_coverage_percent'])
@@ -119,7 +120,7 @@ class SidebandTests(unittest.TestCase):
         fit=replace(decomposition_defaults(a),line_shape='gaussian',sideband_spacing=55.,refine_spacing=False,fit_sideband_width=False)
         q=QuantSettings(**asdict(fit),standard_includes_sidebands=True,sideband_scope_verified=True,
             calibration_verified=True,acquisition_verified=True,assignments_verified=True,
-            standard_area=100,standard_mmol_h=.001,sample_mass_mg=10,reference_mass_mg=10,effective_h=2,capacity_umol_mg=.2)
+            standard_area=100,standard_umol_h=1.,sample_mass_mg=10,reference_mass_mg=10,effective_h=2,capacity_umol_mg=.2)
         result=quantify(a,b,q)
         expected=10*3.5*np.sqrt(np.pi)/(2*np.sqrt(np.log(2)))
         self.assertAlmostEqual(result.values['excess_aliphatic_area'],expected,places=3)

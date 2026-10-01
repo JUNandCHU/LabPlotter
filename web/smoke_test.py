@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from labplotter import __version__
 
 from streamlit.testing.v1 import AppTest
 
@@ -13,10 +16,10 @@ def main() -> None:
     if app.exception:
         raise RuntimeError("; ".join(str(item.value) for item in app.exception))
     titles = [item.value for item in app.title]
-    if titles != ["LabPlotter Web 0.10.2"]:
+    if titles != [f"LabPlotter Web {__version__}"]:
         raise RuntimeError(f"Unexpected title: {titles}")
     labels = [item.label for item in app.tabs]
-    expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "C NMR", "H NMR", "ZetaSizer", "Lab DLS", "TEM", "Custom format"]
+    expected = ["FTIR", "NanoDrop UV–Vis", "ssNMR", "C NMR", "H NMR", "ZetaSizer", "Lab DLS", "NTA", "TEM", "Custom format"]
     if labels != expected:
         raise RuntimeError(f"Unexpected tabs: {labels}")
 

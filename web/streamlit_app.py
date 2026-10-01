@@ -346,6 +346,11 @@ def lab_dls_page() -> None:
     render_lab_dls_page(t, _show_figure, _plot_options)
 
 
+def nta_page() -> None:
+    from web.nta_page import render_nta_page
+    render_nta_page(t, _show_figure, _plot_options)
+
+
 def zeta_page() -> None:
     uploaded = st.file_uploader(t("Files"), type=["xlsx", "xlsm"], accept_multiple_files=True, key="zeta-files")
     results, errors = _parse_many(uploaded, "ZetaSizer")
@@ -516,8 +521,8 @@ def main() -> None:
         st.info(t("Uploaded files are processed only for this browser session. Download your results before closing the page."))
         st.warning(t("Persistent local libraries, Windows clipboard export, editable OCR review, and .labpatch updates remain desktop-only."))
         st.markdown(f"**{t('Contact and feedback')}**  \n{t('Jun Min Moon · moonkeving@gmail.com')}")
-    tabs = st.tabs(["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "Lab DLS", "TEM", t("Custom format")])
-    pages = (ftir_page, nanodrop_page, nmr_page, zeta_page, lab_dls_page, tem_page, custom_page)
+    tabs = st.tabs(["FTIR", "NanoDrop UV–Vis", "ssNMR", "ZetaSizer", "Lab DLS", "NTA", "TEM", t("Custom format")])
+    pages = (ftir_page, nanodrop_page, nmr_page, zeta_page, lab_dls_page, nta_page, tem_page, custom_page)
     for tab, page in zip(tabs, pages):
         with tab:
             page()

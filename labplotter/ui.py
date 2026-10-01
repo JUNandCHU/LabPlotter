@@ -32,6 +32,7 @@ from .i18n import canonical, language, localize_widget_tree, manager as language
 from .models import Spectrum
 from .nmr_ui import SSNMRTab
 from .lab_dls_ui import LabDLSTab
+from .nta_ui import NTATab
 from .ocr import OCRTable, run_table_ocr
 from .parsers import (
     detect_builtin_kind,
@@ -361,9 +362,14 @@ class PlotPane(ttk.Frame):
         self.canvas.draw_idle()
 
     def _cancel_layout(self, event):
-        if event.widget is self and self._layout_job is not None:
-            self.after_cancel(self._layout_job)
-            self._layout_job = None
+        if event.widget is self:
+            if self._layout_job is not None:
+                self.after_cancel(self._layout_job)
+                self._layout_job = None
+            idle_draw = getattr(self.canvas, "_idle_draw_id", None)
+            if idle_draw is not None:
+                self.after_cancel(idle_draw)
+                self.canvas._idle_draw_id = None
 
     def set_figure_ratio(self, ratio=None):
         if ratio is not None:
@@ -2796,6 +2802,7 @@ class LabPlotterApp(tk.Tk):
         self.nmr = NMRWorkspace(self.notebook)
         self.zeta = ZetaTab(self.notebook, ParticleLibrary())
         self.lab_dls = LabDLSTab(self.notebook)
+        self.nta = NTATab(self.notebook)
         self.tem = TEMTab(self.notebook, TEMLibrary())
         self.generic = GenericTab(self.notebook)
         self.notebook.add(self.ftir, text="FTIR")
@@ -2803,6 +2810,7 @@ class LabPlotterApp(tk.Tk):
         self.notebook.add(self.nmr, text="ssNMR")
         self.notebook.add(self.zeta, text="ZetaSizer library")
         self.notebook.add(self.lab_dls, text="Lab DLS")
+        self.notebook.add(self.nta, text="NTA")
         self.notebook.add(self.tem, text="TEM particle size")
         self.notebook.add(self.generic, text="Custom formats")
         self.notebook.enable_traversal()
@@ -2818,7 +2826,7 @@ class LabPlotterApp(tk.Tk):
     def _language_changed(self, old_language: str, new_language: str):
         localize_widget_tree(self, old_language, new_language)
         self.language_var.set("한국어" if new_language == "ko" else "English")
-        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.lab_dls, self.tem, self.generic):
+        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.lab_dls, self.nta, self.tem, self.generic):
             for plot in getattr(tab, "plot_panes", (tab.plot,)):
                 plot.language_changed(old_language, new_language)
         self.tem._refresh()
@@ -2846,11 +2854,15 @@ class LabPlotterApp(tk.Tk):
         )
 
     def _initial_draw(self):
-        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.lab_dls, self.tem, self.generic):
+        for tab in (self.ftir, self.nano, self.nmr, self.zeta, self.lab_dls, self.nta, self.tem, self.generic):
             tab._refresh()
 
     def smart_import(self):
-        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Lab data"), "*.csv *.txt *.tsv *.xml *.xlsx *.xlsm *.asc *.tif *.tiff"), (tr("All files"), "*.*")))
+        paths = filedialog.askopenfilenames(parent=self, filetypes=((tr("Lab data"), "*.csv *.txt *.tsv *.xml *.xlsx *.xlsm *.asc *.tif *.tiff *.zip"), (tr("All files"), "*.*")))
+        nta_paths = [path for path in paths if Path(path).suffix.casefold() == ".zip"]
+        if nta_paths:
+            self.nta.add_paths(nta_paths); self.notebook.select(self.nta)
+        paths = [p for p in paths if p not in nta_paths]
         tem_paths = [path for path in paths if Path(path).suffix.casefold() in TIFF_SUFFIXES]
         if tem_paths:
             self.tem.add_paths(tem_paths)

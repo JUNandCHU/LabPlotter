@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.11.0 — 2026-10-01
+
+- Add desktop and browser NTA workspaces with multi-ZIP atomic import, declared-video manifests, complete six-distribution/percentile validation, cross-file consistency and raw track integrity checks. Report missing files or invalid content before adding data; support nested packs and deduplicate identical imports.
+- Add 19 plot modes covering weighted distributions, technical-video summaries/CV/QC, particle intensity/histograms, inclusion counts, drift, trajectories, displacement, MSD, straightness and intensity traces. Expose explicit dilution, stock mass and footprint inputs for optional derived estimates. Keep instrument and raw-track values separate.
+- Reuse common graph controls, colors, editable legends, fonts, aspect ratio, clipboard and PNG/SVG/PDF export. Persist NTA controls and per-plot axis preferences; export summary, plotted coordinates and measurement/QC CSV. Add Korean controls and Hangul-aware categorical tick labels. Clear trajectory aspect when switching plots and cancel pending canvas draws on close.
+- Preserve the previously delivered 0.10.9 desktop baseline (including H NMR Ver1/Ver2); do not reset libraries. Add synthetic malformed-pack/scientific/GUI regression tests; private measurements are used only for local validation.
+
+## 0.10.9 — 2026-09-30
+
+- Make the ANP report's broad_core3 decomposition available as model Ver2: linked aliphatic, aromatic and broad unassigned MAS families with independent nonnegative satellite heights. Fit both raw quadratures, bounded PH0/PH1 and a complex affine background; keep unassigned area separate from coverage. Default MAS / proton frequency remains 20 kHz / 400 MHz (50 ppm). Integration and complex-fit windows remain explicit and independently recorded.
+- Keep model Ver1 as default and preserve old saved core-template analyses under “Legacy core template (0.10.7–0.10.8)”. No stored model is silently reinterpreted. Honor phase/baseline switches, manual phase overrides and amplitude scale; use an explicit real-only fallback when complex source is absent or smoothing is active.
+- Expose “Aromatic correction: On — aromatic reference / Off — entered masses” in quantitative confirmation. Both choices work with Ver1 and the new Ver2. Preserve mass/calibration/H-count presets, signed coverage and the Schiff/Michael scenario endpoints.
+- Replace the long main quantitative result list with a sample table: aromatic, aliphatic and coverage. Switch between µmol H/mg and raw intensity·ppm integrals. H/mg columns are pre-normalization; coverage reflects the selected correction. Keep a short provisional/out-of-range indicator. Move all other values, component/sideband accounting, warnings and the full audit into “More info”. Values remain selectable/copyable.
+- Share corrected observations between the plot, fit residual, saved fit and CSV. Preserve component colors/styles, solid aliphatic/aromatic curves, residual-off default, library roundtrips and font-sized rows. Cache signatures include both quadratures and correction settings. Model sensitivity also tests fixed phase and broad-family width.
+- Validation: all five supplied ANP series reproduce the earlier report's three family integrals within 0.001%; this is implementation reproducibility, not independent chemical validation. Complex synthetic recovery, both correction formulas, blank zero, manual/disabled corrections, saved-fit invalidation and GUI/browser workflows are covered. Broad assignment and phase-bound warnings remain visible in additional information.
+
+## 0.10.8 — 2026-09-30
+
+- Fix Ver2 quantitative analysis failing with `'float' object cannot be interpreted as an integer` for wide MAS spectra. Preserve the validated integer sideband order when form/JSON input is `2.0`, and validate settings at the template fitter entry point. Fractional orders remain invalid rather than silently rounded.
+- Add display-independent tests of the actual desktop form serializer, pristine ANP blank and modified-core calculations with fresh/saved preprocessing, library/batch restoration and unchanged Ver1 results. Retain all fitting bounds, preprocessing, calibration and coverage equations.
+
+## 0.10.7 — 2026-09-30
+
+- Add selectable H NMR `model Ver1` (existing envelopes, still the default) and `model Ver2` (measured pristine-core template plus additional ligand). Ver2 fits core scale/shift, optional broadening, linked independent +/- sidebands and optional unassigned signal; it does not label the empirical core aromatic or infer particle mass.
+- Connect both models to quantitative confirmation, finite-domain integrals, component/sum/residual overlays, per-curve styles, exact-view exports, CSV/audit, libraries, batch reports, model review and independent sample/reference phase sensitivity. Save template provenance and processed snapshots with fingerprint validation; changing correction settings invalidates fits.
+- Add editable Schiff-base/Michael-addition H-count scenarios, both coverage endpoints and sorted lower/upper values. Default comparison includes one linkage N-H for neutral singly attached Michael products (C6: 13/14; C18: 37/38). C-H-only integration gives identical endpoints; per-ligand overrides persist. These conditional scenarios are not confidence intervals or proof of the binding mechanism.
+- Preserve Ver1 nominal coverage, calibration/mass defaults, raw complex inputs, C NMR and other tabs. Add synthetic algebra/recovery/persistence tests, desktop model-selection tests and browser workflows for both models and endpoint controls.
+
+## 0.10.6 — 2026-09-30
+
+- Route both desktop C/H NMR import buttons through the same format-aware workspace importer. Complex TopSpin exports now open H NMR even when imported from the initial C tab; four-column exports open C NMR from either button.
+- Recognize commented/BOM-prefixed ppm-real-imag tables with all supported delimiters. Preserve specific complex-file validation errors, batch valid spectra, aggregate failures and leave the current selection untouched on cancellation.
+- Preserve raw complex arrays, existing phase/baseline processing, decomposition, quantitative calculations and user libraries. Add regression tests for actual import-button callbacks and mixed-file batches.
+
+## 0.10.5 — 2026-09-30
+
+- Default H NMR coverage to the supplied spreadsheet method: area -> umol H -> per-mg aromatic matching to pristine core -> excess aliphatic H -> ligand stoichiometry / maximum loading. Record normalization factors and all intermediate values. Retain optional mass-only subtraction and signed provisional estimates.
+- Use explicit umol H fields throughout desktop, web, parameter files, batch CSV and audits. The supplied unverified default now means 1.861273386 umol H. Migrate legacy defaults, preserve custom/verified physical amounts, and update unchanged ANP/ANP-DMEN mass defaults to 38.38/55.18 mg.
+- Default residual off and aliphatic/aromatic components to solid lines. Move the H NMR intensity multiplier into the Y-axis label without changing data; retain plain/scientific alternatives. Saved custom curve styles remain editable.
+- Add read-only drag selection within result values, copy-value / tab-separated-table controls and selectable component cells. Preserve font-derived row heights and scrolling.
+- Add read-only line-shape/overlap model comparison and broad-component diagnostics. Review all ANP spectra with multiple starts, alternative models and PH0 perturbations; do not force an expected integral ordering or silently reassign ambiguous signal.
+
+## 0.10.4 — 2026-09-30
+
+- Display provisional absolute coverage/ligand/loading by default without falsely marking calibration, acquisition or fit checks as verified. Keep optional reviewed-only withholding, all unresolved issues, actual assumed units/scales and signed/out-of-range results in audits.
+- Add reviewable all-loaded-sample calculation, persistent reference choices, per-sample errors, result CSV with parameters/status, and coverage-first desktop/browser tables. Missing numeric inputs remain explicit errors.
+- Add noise-aware resolved-sideband PH0/PH1 refinement with simultaneous masked-baseline recalculation, bounded search, central-envelope guards and candidate/acceptance records. Keep previous/manual corrections if no acceptable improvement; preserve raw complex arrays and independent sideband heights.
+- Add a shared-group reprocessing shortcut with stale-result invalidation, Korean controls, font-aware tables, real Tk/browser tests, algebra/persistence/sign/phase regression tests and cumulative update packaging.
+
+## 0.10.3 — 2026-09-30
+
+- Use the editable 400 MHz / 20 kHz lab preset for new wide H NMR imports; link preprocessing masks and MAS fitting to 50 ppm without rescaling the input axis. Keep saved conditions intact and expose an explicit preset/reset route.
+- Default to DMfit-style equal-width satellite links; add fixed per-family G fractions, optional signed diagnostic satellites, and a per-line finite/full-profile integration table. Preserve independent +/- heights and visible overlay/export styles.
+- Add read-only PH0 sensitivity comparisons with fixed PH1 and recomputed baseline/fits, independent sample/reference ranges, entered mass/response scaling, and no label-dependent fitting constraints.
+- Report boundary/alternate-solution ambiguity and instrument/envelope mismatch. Withhold absolute coverage for ambiguous assignments or negative fitted satellite areas. Calibration/acquisition/local residual gates remain active.
+- Keep long coverage warnings from hiding result rows. Refresh decomposition previews after processing changes and reject stale fit application. Add desktop/browser controls, persistence and regression coverage.
+
 ## 0.10.2 — 2026-09-30
 
 - Add empirical MAS sideband families to H NMR decomposition: linked spacing/shape, independent +/- amplitudes, optional common satellite-width multiplier, central/sideband/total integrals and per-order CSV/audit records. No peak-count area multiplier or mirrored weak peaks.

@@ -30,7 +30,7 @@ def main():
     app.button(key='h-quantitative').click().run()
     assert not app.session_state['_hnmr_results']
     app.text_input(key='h-q-'+sample.uid+'-standard_area').set_value('100')
-    app.text_input(key='h-q-'+sample.uid+'-standard_mmol_h').set_value('.001')
+    app.text_input(key='h-q-'+sample.uid+'-standard_umol_h').set_value('1')
     app.checkbox(key='h-q-'+sample.uid+'-standard_includes_sidebands').uncheck()  # Synthetic central-only standard.
     for key in ('calibration_verified','acquisition_verified','assignments_verified'):app.checkbox(key='h-q-'+sample.uid+'-'+key).check()
     next(b for b in app.button if b.label=='Confirm parameters and calculate H NMR').click().run()
