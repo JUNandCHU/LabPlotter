@@ -178,7 +178,7 @@ def apply_origin_style(figure: Figure, axis, options: PlotOptions) -> None:
         color=y_color,
     )
     for label in axis.get_xticklabels() + axis.get_yticklabels():
-        label.set_fontfamily(options.tick_font_family or options.font_family)
+        label.set_fontfamily(font_family_for_text(options.tick_font_family or options.font_family, label.get_text()))
         label.set_fontweight("bold" if options.tick_bold else "normal")
         label.set_color(tick_color)
     axis.grid(False)

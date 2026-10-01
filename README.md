@@ -51,3 +51,7 @@ Use `Updates…` inside LabPlotter to apply a verified `.labpatch`. Format-2 cum
 ## Contact
 
 Jun Min Moon — moonkeving@gmail.com
+
+## NTA workspace (0.11.0)
+
+Import complete NanoSight 3.4 CSV ZIP packs with manifest-based, all-or-nothing validation. The desktop and browser share 19 plotting modes, technical-video SD/SE, QC/settings exports, explicit dilution correction and exploratory trajectory diagnostics. Reuses the common graph, color, font, ratio, legend and export controls. See README_KO.md for the full workflow and scientific scope. Cumulative desktop patches preserve the previously delivered 0.10.9 ssNMR models and user libraries.

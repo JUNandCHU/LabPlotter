@@ -573,6 +573,8 @@ from .lab_dls_labels import KO as LAB_DLS_KO
 KO.update(LAB_DLS_KO)
 from .hnmr_labels import KO as HNMR_KO
 KO.update(HNMR_KO)
+from .nta_labels import KO as NTA_KO
+KO.update(NTA_KO)
 
 def _translated(source: str, language: str) -> str:
     return KO.get(source, source) if language == "ko" else source

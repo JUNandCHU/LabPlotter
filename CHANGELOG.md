@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0 — 2026-10-01
+
+- Add desktop and browser NTA workspaces with multi-ZIP atomic import, declared-video manifests, complete six-distribution/percentile validation, cross-file consistency and raw track integrity checks. Report missing files or invalid content before adding data; support nested packs and deduplicate identical imports.
+- Add 19 plot modes covering weighted distributions, technical-video summaries/CV/QC, particle intensity/histograms, inclusion counts, drift, trajectories, displacement, MSD, straightness and intensity traces. Expose explicit dilution, stock mass and footprint inputs for optional derived estimates. Keep instrument and raw-track values separate.
+- Reuse common graph controls, colors, editable legends, fonts, aspect ratio, clipboard and PNG/SVG/PDF export. Persist NTA controls and per-plot axis preferences; export summary, plotted coordinates and measurement/QC CSV. Add Korean controls and Hangul-aware categorical tick labels. Clear trajectory aspect when switching plots and cancel pending canvas draws on close.
+- Preserve the previously delivered 0.10.9 desktop baseline (including H NMR Ver1/Ver2); do not reset libraries. Add synthetic malformed-pack/scientific/GUI regression tests; private measurements are used only for local validation.
+
 ## 0.10.9 — 2026-09-30
 
 - Make the ANP report's broad_core3 decomposition available as model Ver2: linked aliphatic, aromatic and broad unassigned MAS families with independent nonnegative satellite heights. Fit both raw quadratures, bounded PH0/PH1 and a complex affine background; keep unassigned area separate from coverage. Default MAS / proton frequency remains 20 kHz / 400 MHz (50 ppm). Integration and complex-fit windows remain explicit and independently recorded.

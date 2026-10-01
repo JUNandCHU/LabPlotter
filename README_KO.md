@@ -410,3 +410,23 @@ Windows에서는 다음 폴더에 particle library와 custom format profile이 �
 - 서로 다른 X grid의 ZetaSizer triplicate는 공통 overlap 범위에 interpolation한 뒤 평균과 표준편차를 계산합니다.
 - TEM 입자 분할은 등가 직경의 자동 추정이며, 겹친 입자·응집체·낮은 대비 영상에서는 원본 오버레이 검수가 필요합니다.
 - TEM 통계는 `N_batch`, `N_image`, `N_particle`을 구분하며 개별 입자를 독립 합성 replicate처럼 해석하지 않습니다.
+
+
+## NTA (0.11.0)
+
+NTA 탭에서 **NTA ZIP 가져오기…**로 ZIP 여러 개를 함께 선택할 수 있습니다. 스마트 가져오기도 ZIP을 NTA 탭으로 보냅니다. 이번에 지원하는 형식은 NanoSight 3.4 전체 CSV export입니다.
+
+- 기본 pack: `ExperimentSummary.csv` 1개와 5개 video 각각의 `_Summary.csv`, `_ParticleData.csv`, `_AllTracks.csv` (총 16개). 반복 횟수가 다르면 **Pack당 예상 video 수**를 변경하세요. 실제 video 이름은 ExperimentSummary의 `Filename:` 목록에서 읽습니다.
+- ZIP 내부 폴더도 지원합니다. 필수 파일/섹션/열 누락, 처리되지 않은 video, 잘린 데이터, 중복 항목, 요약과 raw track의 불일치가 있으면 **이번에 선택한 ZIP 전체를 중단**합니다. 오류 창에 누락된 파일 또는 항목을 표시하며, 먼저 불러온 데이터는 유지합니다. 완전히 같은 pack의 재가져오기는 중복 추가하지 않습니다.
+- 샘플을 Ctrl/Shift로 여러 개 선택하면 비교 그래프를 만듭니다. 아래 결과표의 video를 선택하고 **포함 / 제외**하면 분석 대상을 바꿀 수 있습니다. 원본 배열은 변경하지 않습니다. Hexbin은 샘플 한 개만 선택합니다.
+- 19종 그래프: 크기 분포, diffusion 분포, 백분위 곡선, 반복 측정 요약, 측정 순서별 변화, CV, QC flags, size–intensity scatter/hexbin, raw particle-size/track-length histogram, included/excluded counts, 기기 보고 drift, framewise drift, XY 궤적, 변위, MSD, 직진도, intensity trace.
+- 분포는 Number / Surface Area / Volume 가중, 원 export / 합계 100% / 최대값 1 정규화를 지원합니다. 개별 video와 동일 가중 평균을 함께 표시하며 SD / SE / 없음 선택이 가능합니다. 정규화는 video별로 먼저 적용합니다. 평균/오차는 export된 각 video 값으로 다시 계산하므로 기기의 반올림된 Average/SE와 마지막 자리가 다를 수 있습니다.
+- 요약 지표: Mean/Mode/SD/D10/D50/D90, Span/IQR, 농도, Valid Tracks, Included 수/비율, particles/centres per frame, completed tracks. **SD 지표**는 입도 분포 폭이며, **오차 SD**는 video 간 변동입니다.
+- `Diluent=1000` 등의 메모를 희석 보정에 자동 사용하지 않습니다. **총 희석배수**를 입력하고 적용한 뒤 원액 농도를 켜세요. 이미 software 보정이 기록되었다면 `총 배수 / 기록된 배수`만 추가 적용합니다. 원액 질량 농도와 ligand footprint도 입력하면 particle number/mg, 추정 구형 표면적/mg, 이론적 capacity를 그래프로 표시할 수 있습니다.
+- 표면적 계산: `stock particles/mg × π × <diameter²>` (number-weighted exported-bin second moment). 이론적 capacity는 표면적을 footprint와 Avogadro 수로 나눈 µmol/mg입니다. Footprint 기본값 0.185 nm²는 수정 가능한 가정입니다. Hydrodynamic diameter와 export 범위를 사용한 추정치이며 실제 접근 가능한 면적 또는 grafting 측정값이 아닙니다.
+- **그래프 설정**의 폰트/축/범례/개별 색상/비율, 도형, PNG/SVG/PDF 저장 및 클립보드 기능을 그대로 사용합니다. 그래프 종류별 축 설정과 NTA 제어값을 기억합니다. 원 CSV 자료와 video 제외 상태는 현재 세션에 유지되며 재시작 후에는 ZIP을 다시 가져옵니다.
+- 요약 CSV, 현재 그래프 좌표 CSV, 원본 QC/측정 조건 CSV를 UTF-8 BOM으로 저장할 수 있습니다. Windows Excel 한글 표시를 지원합니다. 현재 그래프의 좌표 CSV에는 축/가중/정규화/오차 설정도 포함합니다.
+
+해석: 5개 video는 기술 반복입니다. 독립 합성 batch n=5를 의미하지 않습니다. QC는 기기가 내보낸 판정을 유지하며 임의의 신뢰도 점수를 만들지 않습니다. `Included=True`와 `Valid Tracks`가 다른 경우 두 값을 모두 보존하고 상세 창에 표시합니다. Intensity는 이미 ln 변환되어 있으며 서로 다른 카메라/검출 설정 간 직접 비교에 주의하세요. XY/MSD는 export 좌표의 pixel 단위 탐색 분석이며 흐름·drift·localization 보정을 적용하거나 크기를 역산하지 않습니다. 개별 궤적/변위/intensity 표시만 가장 긴 track부터 제한하고, drift/MSD/직진도 계산에는 선택한 모든 eligible track을 사용합니다.
+
+설치: 기존 앱의 **Updates… → Apply .labpatch…**에서 `LabPlotter_Any_to_0.11.0.labpatch`를 적용합니다. 0.10.9의 ssNMR 기능을 포함하는 누적 업데이트이며 기존 라이브러리 데이터베이스를 초기화하지 않습니다.

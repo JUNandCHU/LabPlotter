@@ -36,6 +36,7 @@ jobs:
       - run: python -m unittest discover -s tests -p "test_web.py" -v
       - run: python web/smoke_test.py
       - run: python web/hnmr_smoke_test.py
+      - run: python web/nta_smoke_test.py
       - run: |
           python -m streamlit run web/streamlit_app.py --server.headless true --server.port 8501 &
           APP_PID=$!
