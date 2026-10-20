@@ -1,6 +1,6 @@
 # LabPlotter
 
-Version **0.11.2** restores the pre-0.11.1 graph appearance and canvas-sized copy/export. It removes the margin controls, forced title coordinates and 8.5-inch enlargement. Fixed-ratio H NMR graphs share the space required by the old automatic layouts across loaded samples, so switching particles preserves the inner axes size without changing fonts, line widths or data. Small-preview axis-title clipping is corrected. Load a figure series together and keep the graph panel size and settings unchanged while copying. Apply `LabPlotter_Any_to_0.11.2.labpatch` and restart; H NMR Ver3, NTA and existing libraries are retained.
+Version **0.11.3** fixes NTA ZIP import for manual camera settings and numbered reanalysis exports. Import the original ZIP without renaming or editing CSVs. Reanalyses stay separate and display their Detection Threshold and export suffix; missing or inconsistent files still block import. Apply `LabPlotter_Any_to_0.11.3.labpatch` and restart. This cumulative update retains 0.11.2 graph appearance and canvas-sized copy/export, H NMR Ver3, libraries and analysis settings.
 
 LabPlotter is a Windows and browser-based scientific workbench for FTIR, NanoDrop UV–Vis, Bruker solid-state NMR, ZetaSizer DLS/zeta-potential exports, and TEM TIFF particle-size screening.
 

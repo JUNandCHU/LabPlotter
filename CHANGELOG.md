@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.3 — 2026-10-20
+
+- Accept NanoSight's `Camera Level = Manual settings used` metadata while keeping numeric shutter/gain checks and preserving the original camera text in QC exports.
+- Import numbered reanalysis sets (`ExperimentSummary_1.csv`, `Summary_1.csv`, `ParticleData_1.csv`, `AllTracks_1.csv`, and other numbered suffixes) directly from the original ZIP. Pair every video with the same export suffix, keep analyses separate, and show Detection Threshold/export labels in the sample list and plots. Reanalyses of the same videos are not independent acquisition repeats.
+- Keep complete-pack and cross-file integrity validation. Missing files never fall back to another analysis. Report an invalid experiment summary without generating misleading orphan-file errors for all its children.
+- Apply as a cumulative patch, retaining the delivered 0.11.2 graph behavior, H NMR Ver3, libraries and settings. Validate both user-supplied ZIPs unchanged, including all nine analysis sets in the previously rejected archive.
+
 ## 0.11.2 — 2026-10-06
 
 - Restore the pre-0.11.1 graph defaults, automatic axis-title padding and canvas-sized copy/export. Remove the margin controls, forced title coordinates and 8.5-inch export enlargement introduced in 0.11.1; the enlargement made fonts and lines appear smaller when figures were pasted at the same PowerPoint size.
