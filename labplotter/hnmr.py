@@ -419,6 +419,8 @@ class QuantSettings:
     ligand_fwhm_max: float = 15.
     template_shift_max: float = .3
     template_broadening_max: float = 0.
+    broad_aromatic_fwhm_min: float = 14.
+    broad_aromatic_fwhm_max: float = 50.
     unassigned_min: float = 2.
     unassigned_max: float = 9.
     unassigned_fwhm_min: float = 14.
@@ -717,7 +719,7 @@ def quantify(sample: HNMRSpectrum, reference: HNMRSpectrum, q: QuantSettings) ->
     values.update({k: None if blockers and not q.show_provisional else v for k, v in absolute.items()})
     # Window integrals are diagnostic only and never drive this calculation.
     for label, processed, fitted in (("sample", a, fit_a), ("reference", b, fit_b)):
-        xx,yy = (fitted.x,fitted.observed) if fitted.audit.get('version') == 5 else (processed.x,processed.y)
+        xx,yy = (fitted.x,fitted.observed) if fitted.audit.get('version') in (5, 6) else (processed.x,processed.y)
         values[label+"_window_aliphatic_area"] = integrate(xx, yy, q.aliphatic_min, q.aliphatic_max)
         values[label+"_window_aromatic_area"] = integrate(xx, yy, q.aromatic_min, q.aromatic_max)
     core_curve = alpha*fit_b.curves["aliphatic"]*q.reference_response_factor
@@ -738,7 +740,7 @@ def quantify(sample: HNMRSpectrum, reference: HNMRSpectrum, q: QuantSettings) ->
                  "migration_note": sample.metadata.get('quantitation_migration_note', ''),
                  "coverage_clipped": False},
              "unvalidated_algebra_only": absolute if blockers else None, "warnings": warnings}
-    equations = ("Fit absorption spectrum = aliphatic + aromatic [+ unassigned]. Ver2 jointly fits both quadratures with phase and affine background; unassigned area is excluded from coverage. Residual = data - sum.\n"
+    equations = ("Fit absorption spectrum = aliphatic + aromatic [+ unassigned]. Ver2/Ver3 jointly fit both quadratures with phase and affine background. Ver2 unassigned area is excluded; Ver3 aromatic area sums the narrow and broad profiles with a shared aromatic center. Residual = data - sum.\n"
                  "MAS model: each family = sum of order 0 and independent +/- sidebands; center_n = center_0 + n * spacing. spacing[ppm] = MAS[Hz] / 1H[MHz] when provided.\n"
                  "Family integral = sum of measured finite-domain integrals of every included order, not central area times number of peaks. No +/- height symmetry is imposed.\n"
                  "Pseudo-Voigt = height * [(1-eta)*exp(-4*ln(2)*((ppm-center)/FWHM)^2) + eta/(1+4*((ppm-center)/FWHM)^2)].\n"

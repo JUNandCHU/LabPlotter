@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from io import BytesIO
 import re
@@ -222,6 +222,94 @@ def figure_export_bbox(figure: Figure):
     return "tight"
 
 
+def layout_plot_group(figure: Figure, options: PlotOptions, peers=()) -> None:
+    """Use the legacy automatic layout, sharing its required space among peers.
+
+    Each peer is (cache_key, draw_callback). There is no preset margin, font
+    scaling or output size. A single sample keeps the old automatic layout.
+    Measuring all loaded samples before the first copy makes the result
+    independent of selection order and leaves room for the longest tick text.
+    """
+    peers = tuple(peers)
+    figure._labplotter_shared_layout = None
+    if options.figure_ratio is None or len(peers) < 2:
+        figure.tight_layout()
+        # This is also what the legacy resize callback did after refresh;
+        # allow the automatic tick locator to settle before measuring again.
+        figure.tight_layout()
+        _keep_axis_titles_visible(figure)
+        return
+
+    size = tuple(figure.get_size_inches())
+    key = (size, figure.dpi, repr(asdict(options)), tuple(item[0] for item in peers))
+    cached = getattr(figure, "_labplotter_layout_cache", None)
+    if cached is not None and cached[0] == key:
+        bounds = cached[1]
+    else:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        probe = Figure(figsize=size, dpi=figure.dpi)
+        FigureCanvasAgg(probe)
+        axis = probe.add_subplot(111)
+        # Union of the space actually needed by the old automatic layouts.
+        names = ("left", "right", "bottom", "top")
+        start = {name: getattr(probe.subplotpars, name) for name in names}
+        for _ in range(2):
+            bounds = dict(left=0., right=1., bottom=0., top=1.)
+            for _, draw in peers:
+                axis.clear()
+                probe.subplots_adjust(**start)
+                draw(axis, options)
+                apply_origin_style(probe, axis, options)
+                probe.tight_layout()
+                probe.tight_layout()
+                for name in bounds:
+                    value = getattr(probe.subplotpars, name)
+                    bounds[name] = (max if name in ("left", "bottom") else min)(bounds[name], value)
+            start = bounds.copy()
+        figure._labplotter_layout_cache = (key, bounds)
+    figure.subplots_adjust(**bounds)
+    figure._labplotter_shared_layout = bounds
+    _keep_axis_titles_visible(figure)
+
+
+def _keep_axis_titles_visible(figure: Figure) -> None:
+    """Keep normal automatic label padding; only contain overflowing titles.
+
+    tight_layout deliberately ignores a vertical title's height (and a
+    horizontal title's width). Do not let a narrow preview crop those ends.
+    No font, frame or export-size changes are made.
+    """
+    # Undo only our previous containment shift when the preview grows again.
+    for axis in figure.axes:
+        for label, direction in ((axis.xaxis.label, 0), (axis.yaxis.label, 1)):
+            original = getattr(label, "_labplotter_title_position", None)
+            if original is not None:
+                position = list(label.get_position())
+                position[direction] = original
+                label.set_position(position)
+                del label._labplotter_title_position
+    figure.draw_without_rendering()
+    renderer = figure.canvas.get_renderer()
+    pad = 2 * figure.dpi / 72
+    for axis in figure.axes:
+        for label, direction, span, extent in (
+            (axis.xaxis.label, 0, axis.bbox.width, figure.bbox.width),
+            (axis.yaxis.label, 1, axis.bbox.height, figure.bbox.height),
+        ):
+            if not label.get_visible() or not label.get_text() or span <= 0:
+                continue
+            bounds = label.get_window_extent(renderer)
+            low, high = bounds.intervalx if direction == 0 else bounds.intervaly
+            if high-low > extent-2*pad:
+                continue  # Cannot fit without changing the user's font/size.
+            delta = max(pad-low, 0) - max(high-(extent-pad), 0)
+            if delta:
+                position = list(label.get_position())
+                label._labplotter_title_position = position[direction]
+                position[direction] += delta/span
+                label.set_position(position)
+
+
 def save_plot_figure(figure: Figure, destination, **kwargs) -> None:
     size = figure.get_size_inches().copy()
     positions = [(axis, axis.get_position().frozen(), axis.get_in_layout()) for axis in figure.axes]
@@ -229,7 +317,10 @@ def save_plot_figure(figure: Figure, destination, **kwargs) -> None:
         ratio = getattr(figure, "_labplotter_ratio", None)
         if ratio is not None and not getattr(figure, "_labplotter_export_current_view", False):
             figure.set_size_inches(*figure_size_for_ratio(size, ratio), forward=False)
-            if figure.get_layout_engine() is None:
+            shared = getattr(figure, "_labplotter_shared_layout", None)
+            if shared is not None:
+                figure.subplots_adjust(**shared)
+            elif figure.get_layout_engine() is None:
                 figure.tight_layout()
         figure.savefig(destination, bbox_inches=figure_export_bbox(figure), **kwargs)
     finally:

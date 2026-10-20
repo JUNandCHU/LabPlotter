@@ -1,5 +1,7 @@
 # LabPlotter
 
+Version **0.11.2** restores the pre-0.11.1 graph appearance and canvas-sized copy/export. It removes the margin controls, forced title coordinates and 8.5-inch enlargement. Fixed-ratio H NMR graphs share the space required by the old automatic layouts across loaded samples, so switching particles preserves the inner axes size without changing fonts, line widths or data. Small-preview axis-title clipping is corrected. Load a figure series together and keep the graph panel size and settings unchanged while copying. Apply `LabPlotter_Any_to_0.11.2.labpatch` and restart; H NMR Ver3, NTA and existing libraries are retained.
+
 LabPlotter is a Windows and browser-based scientific workbench for FTIR, NanoDrop UV–Vis, Bruker solid-state NMR, ZetaSizer DLS/zeta-potential exports, and TEM TIFF particle-size screening.
 
 - Origin-style scientific plots with editable axes, fonts, legends, annotations, and exact width:height export ratios (including square and reset)
@@ -17,7 +19,7 @@ LabPlotter is a Windows and browser-based scientific workbench for FTIR, NanoDro
 - Desktop measurement data remains on the local computer
 - Session-oriented Streamlit web interface using the same scientific core
 
-The current development release is **0.10.9**. H NMR retains **model Ver1** as the default and adds the ANP report's new **model Ver2**: aliphatic + aromatic + broad unassigned families fitted to complex data, with MAS satellites, phase and affine background. Unassigned area is never silently counted as ligand. Old core-template fits remain available as **Legacy core template (0.10.7–0.10.8)**. Quantitative confirmation has an explicit **Aromatic correction On / Off** selector. The main result table shows sample, aromatic, aliphatic and ligand coverage, with µmol H/mg or raw-integral units; **More info** holds all intermediate values and diagnostics. H/mg values precede aromatic normalization. Both models retain shared plotting, libraries and exports. Coverage ranges remain editable Schiff/Michael H-count scenarios, not confidence intervals; manual corrections and scientific uncertainty are preserved. See [README_KO.md](README_KO.md) for the model, equations and cumulative patch workflow. Version 0.5.1 remains the first GitHub baseline.
+H NMR features introduced in **0.10.9** remain available. H NMR retains **model Ver1** as the default and adds the ANP report's new **model Ver2**: aliphatic + aromatic + broad unassigned families fitted to complex data, with MAS satellites, phase and affine background. Unassigned area is never silently counted as ligand. Old core-template fits remain available as **Legacy core template (0.10.7–0.10.8)**. Quantitative confirmation has an explicit **Aromatic correction On / Off** selector. The main result table shows sample, aromatic, aliphatic and ligand coverage, with µmol H/mg or raw-integral units; **More info** holds all intermediate values and diagnostics. H/mg values precede aromatic normalization. Both models retain shared plotting, libraries and exports. Coverage ranges remain editable Schiff/Michael H-count scenarios, not confidence intervals; manual corrections and scientific uncertainty are preserved. See [README_KO.md](README_KO.md) for the model, equations and cumulative patch workflow. Version 0.5.1 remains the first GitHub baseline.
 
 ## Run from source
 

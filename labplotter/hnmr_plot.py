@@ -26,7 +26,7 @@ def draw_hnmr(axis, spectrum, processed, options, fit=None, show_components=True
     styles = spectrum.metadata.get('decomposition_styles', {})
     defaults = {key: (label, index, style) for key, label, index, style in ROLES}
     real, imag = processed.y, processed.imaginary
-    if fit and fit.audit.get('version') == 5:
+    if fit and fit.audit.get('version') in (5, 6):
         from .hnmr_family import corrected_complex
         corrected = corrected_complex(processed, fit.audit)
         real, imag = corrected.real, corrected.imag
