@@ -121,7 +121,7 @@ def _model_fields(forms):
     if previous != model:
         if model in cache:
             for k,value in cache[model].items(): variables[k].set(value)
-        elif model == 'broad_core3':
+        elif model in ('broad_core3', 'broad_aromatic3'):
             old = asdict(DecompositionSettings())
             preset = asdict(select_model(DecompositionSettings(),model))
             for k,value in preset.items():
@@ -130,10 +130,14 @@ def _model_fields(forms):
     forms[0]._model_cache = cache
     forms[0]._last_model = model
     modern = model == 'core_template'
-    family = model == 'broad_core3'
+    family = model in ('broad_core3', 'broad_aromatic3')
     for name in ('unassigned_min','unassigned_max','unassigned_fwhm_min','unassigned_fwhm_max',
                  'complex_fit_min','complex_fit_max','joint_phase','joint_phase0_limit','joint_phase1_limit'):
         if name in widgets: widgets[name].configure(state='normal' if family else 'disabled')
+    for name in ('unassigned_min','unassigned_max','unassigned_fwhm_min','unassigned_fwhm_max'):
+        if name in widgets: widgets[name].configure(state='normal' if model == 'broad_core3' else 'disabled')
+    for name in ('broad_aromatic_fwhm_min','broad_aromatic_fwhm_max'):
+        if name in widgets: widgets[name].configure(state='normal' if model == 'broad_aromatic3' else 'disabled')
     for name in ('overlap_band','refine_spacing','fit_sideband_width','allow_negative_sidebands'):
         if name in widgets: widgets[name].configure(state='disabled' if family else 'normal')
     for name in ('ligand_min','ligand_max','ligand_fwhm_min','ligand_fwhm_max','template_shift_max','template_broadening_max'):
@@ -141,7 +145,7 @@ def _model_fields(forms):
     for form in forms:
         if 'aliphatic_gaussian_fraction' in form.labels:
             form.labels['aliphatic_gaussian_fraction'].configure(text=tr('Additional ligand G fraction (0=L, 1=G; blank=fit)' if modern else 'Aliphatic G fraction (0=L, 1=G; blank=fit)'))
-            form.labels['aromatic_gaussian_fraction'].configure(text=tr('Aromatic G fraction (Ver1 only)' if modern else 'Aromatic G fraction (0=L, 1=G; blank=fit)'))
+            form.labels['aromatic_gaussian_fraction'].configure(text=tr('Aromatic G fraction (Ver1 only)' if modern else 'Ver3 narrow aromatic G fraction (0=L, 1=G; blank=fit)' if model == 'broad_aromatic3' else 'Aromatic G fraction (0=L, 1=G; blank=fit)'))
             form.widgets['aromatic_gaussian_fraction'].configure(state='disabled' if modern else 'normal')
     if 'core_scaling' in variables:
         target = 'core_reference' if modern else 'aromatic_reference'
@@ -400,15 +404,17 @@ DECOMPOSITION_FIELDS = [('model','Decomposition model',tuple(MODEL_LABELS)),
                         ('ligand_fwhm_max','Legacy template ligand maximum FWHM (ppm)','number'),
                         ('template_shift_max','Legacy template maximum core shift (ppm; 0 = fixed)','number'),
                         ('template_broadening_max','Legacy template maximum extra core FWHM (ppm; 0 = none)','number'),
+                        ('broad_aromatic_fwhm_min','Ver3 broad aromatic minimum FWHM (ppm)','number'),
+                        ('broad_aromatic_fwhm_max','Ver3 broad aromatic maximum FWHM (ppm)','number'),
                         ('unassigned_min','Ver2 broad unassigned center minimum (ppm)','number'),
                         ('unassigned_max','Ver2 broad unassigned center maximum (ppm)','number'),
                         ('unassigned_fwhm_min','Ver2 broad unassigned minimum FWHM (ppm)','number'),
                         ('unassigned_fwhm_max','Ver2 broad unassigned maximum FWHM (ppm)','number'),
-                        ('complex_fit_min','Ver2 complex fitting minimum (ppm)','number'),
-                        ('complex_fit_max','Ver2 complex fitting maximum (ppm)','number'),
-                        ('joint_phase','Ver2 jointly refine automatic phase (manual overrides stay fixed)','bool'),
-                        ('joint_phase0_limit','Ver2 absolute PH0 limit (+/- degrees)','number'),
-                        ('joint_phase1_limit','Ver2 absolute PH1 limit (+/- degrees across processing span)','number')]
+                        ('complex_fit_min','Ver2/3 complex fitting minimum (ppm)','number'),
+                        ('complex_fit_max','Ver2/3 complex fitting maximum (ppm)','number'),
+                        ('joint_phase','Ver2/3 jointly refine automatic phase (manual overrides stay fixed)','bool'),
+                        ('joint_phase0_limit','Ver2/3 absolute PH0 limit (+/- degrees)','number'),
+                        ('joint_phase1_limit','Ver2/3 absolute PH1 limit (+/- degrees across processing span)','number')]
 QUANT_REGIONS = [row for row in DECOMPOSITION_FIELDS if row[0] != 'model'] + [("assignments_verified", "Component assignments, H count and core model reviewed", "bool"),
                         ("sideband_scope_verified", "Included orders, weak peaks, phase and baseline reviewed", "bool")]
 
@@ -479,7 +485,7 @@ class HDecompositionDialog(tk.Toplevel):
         self.processed = workspace.processed(sample); self.fit = None
         self.columnconfigure(0, weight=1); self.rowconfigure(1, weight=1)
         top = ttk.Frame(self, padding=8); top.grid(row=0,column=0,sticky='ew'); top.columnconfigure(1,weight=1)
-        ttk.Label(top,text='Ver1: aliphatic/aromatic envelopes. Ver2: complex aliphatic + aromatic + broad unassigned families. Legacy template requires a pristine reference.',wraplength=1150).grid(row=0,column=0,columnspan=2,sticky='w')
+        ttk.Label(top,text='Ver1: aliphatic/aromatic envelopes. Ver2: complex aliphatic + aromatic + broad unassigned. Ver3: aliphatic + narrow/broad aromatic; shared aromatic center. Legacy template requires a pristine reference.',wraplength=1150).grid(row=0,column=0,columnspan=2,sticky='w')
         ttk.Label(top,text='Legacy template reference').grid(row=1,column=0,sticky='w',pady=5)
         self.reference = ttk.Combobox(top,state='readonly',values=[s.name for s in workspace.spectra],width=45)
         self.reference.grid(row=1,column=1,sticky='ew',padx=8)
@@ -528,7 +534,7 @@ class HDecompositionDialog(tk.Toplevel):
     def selected_reference(self, settings):
         if settings.model != 'core_template': return None
         index = self.reference.current()
-        if index < 0: raise ValueError('Load and select a pristine core reference for model Ver2.')
+        if index < 0: raise ValueError('Load and select a pristine core reference for the legacy template.')
         ref = self.workspace.spectra[index]
         core,ligand = infer_identity(ref.name)
         sample_core,_ = infer_identity(self.sample.name)
@@ -603,7 +609,7 @@ class QuantDialog(tk.Toplevel):
         book.add(notes,text=tr('Model / calibration notes'))
         notes.insert('1.0',"If saved preprocessing is unchecked, both spectra are freshly processed on a common default grid using the sample's phase/baseline switches.\n\n"
                   "aromatic_reference: match aromatic H per mg to pristine core, then subtract core aliphatic H per mg. The sample mass cancels from coverage; reference mass remains.\n"
-                  "Ver2 jointly fits complex data and a broad unassigned family. Aromatic correction OFF uses entered masses; ON uses aromatic-reference normalization. Legacy core_reference uses measured core scaling. Schiff/Michael endpoints assume neutral single attachment; the optional +1 N-H must be captured. C-H-only counts are identical.\n"
+                  "Ver2 uses a broad unassigned family. Ver3 assigns the jointly refitted broad profile to aromatic; chemical assignment remains model-dependent. Aromatic correction OFF uses entered masses; ON uses aromatic-reference normalization. Legacy core_reference uses measured core scaling. Schiff/Michael endpoints assume neutral single attachment; the optional +1 N-H must be captured. C-H-only counts are identical.\n"
                   "Default standard: 42565812.55 intensity*ppm = 1.861273386 umol H. This is an editable working assumption; response multipliers default to 1.\n"
                   "Turn off 'Show provisional coverage' in Calibration for reviewed-only mode. Negative and >100% estimates remain visible.\n\n"+REACTION_NOTE)
         notes.configure(state='disabled')
@@ -804,6 +810,7 @@ class HNMRTab(ttk.Frame):
         graph = ttk.Frame(vertical); lower = ttk.LabelFrame(vertical, text="Quantitative results", padding=5)
         vertical.add(graph, weight=4); vertical.add(lower, weight=1)
         self.plot = PlotPane(graph, self._draw, PlotOptions("Chemical shift", "ppm", "Intensity", "a.u.", reverse_x=True), compact=True, export_current_view=True)
+        self.plot.layout_peers = self._layout_peers
         self.plot.settings_extension = HDecompositionStyle(self)
         self.plot.vars["x_min"].set("-5"); self.plot.vars["x_max"].set("15")
         self.plot.pack(fill="both", expand=True)
@@ -1047,6 +1054,23 @@ class HNMRTab(ttk.Frame):
         p = result.sample if result else self.processed(s)
         draw_hnmr(axis, s, p, options, self.fitted(s), self.show_components.get(), self.show_imag.get(), self.plot.register_overlay)
 
+    def _layout_peers(self):
+        """Measure the existing display of each loaded spectrum, without fitting."""
+        peers = []
+        for sample in self.spectra:
+            result = self.results.get(sample.uid)
+            processed = result.sample if result else self.processed(sample)
+            fit = self.fitted(sample)
+            components = sample.metadata.get("show_decomposition", True)
+            imaginary = self.show_imag.get()
+            key = (sample.uid, id(processed), id(result.sample_fit) if result else id(sample.metadata.get("decomposition")),
+                   components, imaginary, sample.metadata.get("intensity_notation", "axis_label"),
+                   sample.metadata.get("decomposition_fill", False), repr(sample.metadata.get("decomposition_styles", {})))
+            def draw(axis, options, s=sample, p=processed, f=fit, c=components, i=imaginary):
+                draw_hnmr(axis, s, p, options, f, c, i)
+            peers.append((key, draw))
+        return peers
+
     def _refresh(self):
         if not hasattr(self, "plot"): return
         s = self.current()
@@ -1061,8 +1085,8 @@ class HNMRTab(ttk.Frame):
         self.plot.refresh(); self.result_selection.hide(); self.result_tree.delete(*self.result_tree.get_children())
         result = self.results.get(s.uid) if s else None
         fit = self.fitted(s) if s else None
-        if s and fit and fit.audit.get('version') == 5:
-            self.status.set(f"{s.name}\n{len(s.x):,} complex points | Ver2 fitted display\nPH0 = {fit.audit['phase0_deg']:.4g}, PH1 = {fit.audit['phase1_deg']:.4g} deg\n"+
+        if s and fit and fit.audit.get('version') in (5, 6):
+            self.status.set(f"{s.name}\n{len(s.x):,} complex points | {MODEL_LABELS[fit.audit['settings']['model']]} fitted display\nPH0 = {fit.audit['phase0_deg']:.4g}, PH1 = {fit.audit['phase1_deg']:.4g} deg\n"+
                             ('Common preprocessing prepared' if s.processing.get('prepared') else 'Common preprocessing not prepared'))
         units = next(k for k,v in UNITS.items() if v == self.result_units.get())
         for key in ('aromatic','aliphatic'):
@@ -1097,8 +1121,12 @@ class HNMRTab(ttk.Frame):
         ttk.Button(values_page,text='Copy all values',command=selection.copy_table).pack(anchor='w',pady=6)
         warnings = ScrolledText(book,wrap='word',font='TkDefaultFont'); book.add(warnings,text='Assumptions / diagnostics')
         warning_text = short_status(result,fit)+'\n\n'+'\n\n'.join(result.warnings if result else fit.warnings)
-        if fit.audit.get('version') == 5:
-            warning_text += f"\n\nJoint phase: PH0 = {fit.audit['phase0_deg']:.8g}°, PH1 = {fit.audit['phase1_deg']:.8g}° (pivot {fit.audit['phase_pivot_ppm']:g} ppm; span {fit.audit['phase_span_ppm']:g} ppm).\nBroad unassigned integral = {fit.areas['unassigned']:.12g} intensity·ppm; excluded from coverage."
+        if fit.audit.get('version') in (5, 6):
+            warning_text += f"\n\nJoint phase: PH0 = {fit.audit['phase0_deg']:.8g}°, PH1 = {fit.audit['phase1_deg']:.8g}° (pivot {fit.audit['phase_pivot_ppm']:g} ppm; span {fit.audit['phase_span_ppm']:g} ppm)."
+            if fit.audit['version'] == 6:
+                warning_text += '\nVer3 aromatic = narrow + broad (both include MAS sidebands).\n'+json.dumps(fit.audit['subareas'],indent=2)
+            else:
+                warning_text += f"\nBroad unassigned integral = {fit.areas['unassigned']:.12g} intensity·ppm; excluded from coverage."
         warnings.insert('1.0',warning_text); warnings.configure(state='disabled')
         text = ScrolledText(book, wrap="word", font=("TkFixedFont", 10)); book.add(text,text='Full calculation record')
         text.insert("1.0", content); text.configure(state="disabled")
@@ -1141,7 +1169,7 @@ class HModelReviewDialog(tk.Toplevel):
             reference = None
             if settings.model == 'core_template':
                 from .hnmr_template import template_processed
-                if not fit: raise ValueError('Fit model Ver2 with its pristine reference before reviewing sensitivity.')
+                if not fit: raise ValueError('Fit the legacy template with its pristine reference before reviewing sensitivity.')
                 reference = template_processed(fit.audit)
             self.report = model_review(processed, settings, reference,
                                        fit.audit.get('reference') if fit else None,
@@ -1178,21 +1206,21 @@ class HComponentDialog(tk.Toplevel):
                   "Family area = central + all included +/- orders. G fraction: 1 = Gaussian, 0 = Lorentzian. Full-profile area extrapolates tails to infinity.",
                   padding=8, wraplength=1150).grid(row=0, column=0, sticky='ew')
         frame,self.tree=_tree(self, [('family','Family',130),('order','Order',70),('center','Center ppm',110),
-            ('width','FWHM ppm',110),('gauss','G fraction',100),('area','Finite area',155),
+            ('width','FWHM ppm',110),('gauss','G fraction',100),('height','Height',130),('area','Finite area',155),
             ('full','Full-profile area',155),('percent','Finite total %',125)], height=11)
         frame.grid(row=1,column=0,sticky='nsew',padx=8)
         self.cell_selection = SelectableTreeCells(self.tree)
         lines=a.get('lines') or [{'family':k,'order':0,'parameters':v,'area':fit.areas[k]} for k,v in a['parameters'].items()]
         if a.get('version') == 4:
-            self.tree.insert('','end',values=('core_template','measured','','','',f"{fit.areas['core_template']:.10g}",'',''))
+            self.tree.insert('','end',values=('core_template','measured','','','','',f"{fit.areas['core_template']:.10g}",'',''))
         total=sum(fit.areas.values())
         for line in lines:
             amp,c,w,eta=line['parameters']
             full=line.get('full_profile_area',amp*w*((1-eta)*np.sqrt(np.pi)/(2*np.sqrt(np.log(2)))+eta*np.pi/2))
-            self.tree.insert('','end',values=(line['family'],f"{line['order']:+d}",f'{c:.6g}',f'{w:.6g}',f'{1-eta:.6g}',
+            self.tree.insert('','end',values=(line.get('component',line['family']),f"{line['order']:+d}",f'{c:.6g}',f'{w:.6g}',f'{1-eta:.6g}',f'{amp:.10g}',
                 f"{line['area']:.10g}",f'{full:.10g}',f"{100*line['area']/total:.5f}" if total else 'undefined'))
         for family, area in fit.areas.items():
-            self.tree.insert('','end',values=(family,'SUM','','','',f'{area:.10g}',
+            self.tree.insert('','end',values=(family,'SUM','','','','',f'{area:.10g}',
                 f"{a.get('full_profile_areas',{}).get(family,0):.10g}" if family in a.get('full_profile_areas',{}) else '',
                 f'{100*area/total:.5f}' if total else 'undefined'))
         _fit_table_values(self.tree)
@@ -1273,8 +1301,8 @@ class HQualityDialog(tk.Toplevel):
         note=(f"Preprocessing PH0 {p.audit['auto_phase0_deg']:.3f} deg; PH1 {p.audit.get('auto_phase1_deg',0):.3f} deg across {p.x[-1]-p.x[0]:g} ppm. "
               f"Pivot {p.audit['phase_pivot_ppm']:g} ppm. Detected sideband envelopes: {diagnostic.get('detected_sideband_envelopes','n/a')}.\n"
               "Positions follow a common spacing; +/- heights need not be equal. Weak outer peaks remain uncertain. Peak count alone does not establish aliphatic/aromatic assignment.")
-        if fit and fit.audit.get('version') == 5:
-            note += f"\nDisplayed Ver2 fit: PH0 {fit.audit['phase0_deg']:.4g}, PH1 {fit.audit['phase1_deg']:.4g} deg (same pivot/span); see the Ver2 corrected trace."
+        if fit and fit.audit.get('version') in (5, 6):
+            note += f"\nDisplayed complex fit: PH0 {fit.audit['phase0_deg']:.4g}, PH1 {fit.audit['phase1_deg']:.4g} deg (same pivot/span); see the jointly corrected trace."
         refinement=p.audit.get('phase_diagnostics',{}).get('sideband_refinement')
         if refinement:
             note+='\nSideband refinement: '+refinement['reason']
@@ -1285,7 +1313,9 @@ class HQualityDialog(tk.Toplevel):
         self.tree.column('order',stretch=False);self.tree.column('status',stretch=True)
         frame.pack(fill='both',expand=True)
         local={r['order']:r['RMSE_over_local_peak'] for r in fit.audit.get('local_fit_errors',[])} if fit else {}
-        areas={(r['order'],r['family']):r['area'] for r in fit.audit.get('lines',[])} if fit else {}
+        areas={}
+        for line in fit.audit.get('lines',[]) if fit else []:
+            key=(line['order'],line['family']); areas[key]=areas.get(key,0.)+line['area']
         for row in diagnostic.get('envelopes',[]):
             self.tree.insert('','end',values=(f"{row['order']:+d}",row['status'],
                 '' if row['peak_ppm'] is None else f"{row['peak_ppm']:.3f}",'' if row['SNR'] is None else f"{row['SNR']:.2f}",
@@ -1312,11 +1342,13 @@ class HQualityDialog(tk.Toplevel):
             ('baseline','Subtracted baseline',p.baseline,'#c00000','--')):
             color=curve_color(axis,s.uid+':qc:'+key,label,default,colors,key)
             axis.plot(p.x,y,color=color,lw=options.line_width,ls=style,label=label)
-        if self.fit and self.fit.audit.get('version') == 5:
+        if self.fit and self.fit.audit.get('version') in (5, 6):
             from .hnmr_family import corrected_complex
             y=corrected_complex(p,self.fit.audit).real
-            color=curve_color(axis,s.uid+':qc:ver2','Ver2 corrected real','#401f68',colors,'ver2')
-            axis.plot(p.x,y,color=color,lw=options.line_width,label='Ver2 corrected real')
+            tag='ver3' if self.fit.audit['version']==6 else 'ver2'
+            label=MODEL_LABELS[self.fit.audit['settings']['model']]+' corrected real'
+            color=curve_color(axis,s.uid+':qc:'+tag,label,'#401f68',colors,tag)
+            axis.plot(p.x,y,color=color,lw=options.line_width,label=label)
         axis.axhline(0,color='#006c31',lw=.6,ls=':')
         # PlotPane applies common axes, legend and export settings after drawing.
 

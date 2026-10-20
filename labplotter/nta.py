@@ -10,6 +10,8 @@ import csv
 import hashlib
 import io
 import math
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from zipfile import ZipFile, BadZipFile
@@ -26,7 +28,8 @@ TRACK_COLUMNS = ("Particle ID", "Size/nm", "Diffusion coefficient/nm^2 s^-1",
                  "Frame", "X/pixels", "Y/pixels", "Ln(Adjusted intensity)/AU", "Included in distribution?")
 METHOD_NOTE = (
     "SD and SE describe technical video-to-video variation (SE = sample SD / sqrt(n)); "
-    "videos are not independent synthesis batches. QC flags are the instrument's flags, "
+    "videos are not independent synthesis batches. Numbered exports are separate analyses "
+    "of the same videos, not extra acquisition repeats. QC flags are the instrument's flags, "
     "not a new pass/fail score. Included particle counts can differ from Summary Valid Tracks. "
     "Exported size curves are instrument-processed distributions; custom histograms count "
     "tracks and are not concentration distributions. Ln intensity is already logarithmic; "
@@ -86,6 +89,7 @@ class NTAPack:
     dilution: float | None = None  # total physical dilution, explicitly entered
     mass_mg_ml: float | None = None  # stock mass concentration
     footprint_nm2: float = 0.185
+    analysis_suffix: str = ''  # terminal export suffix, distinct from the acquisition name
 
     @property
     def included(self):
@@ -151,7 +155,10 @@ def parse_summary(payload: bytes, experiment=True) -> Summary:
             vals = sections[section].get(key, [])[:n]
             if len(vals) != n:
                 raise ValueError(f"{section} / {key}: missing video column")
-            _numbers(vals, key)
+            # NanoSight writes a categorical value here for manual camera settings.
+            # Preserve it in conditions; shutter/gain still undergo numeric validation.
+            numeric = [v for v in vals if v.casefold() != 'manual settings used'] if key == 'Camera Level' else vals
+            _numbers(numeric, key)
     for key in ("Concentration", "Completed Tracks", "Video length", "Noise level", "Vibration detected", "Vibration correction applied", "Settings changed?"):
         if len(sections['[Information]'].get(key, [])) < n or any(not v for v in sections['[Information]'][key][:n]):
             raise ValueError(f"[Information] / {key}: missing QC content")
@@ -262,6 +269,24 @@ def _check_tracks(p, t):
     return t
 
 
+_EXPORT_FILENAME = re.compile(
+    r'(?P<role>ExperimentSummary|_Summary|_ParticleData|_AllTracks)(?P<suffix>_[0-9]+)?\.csv$',
+    re.IGNORECASE,
+)
+
+
+def _export_identity(name):
+    """Only the suffix after the file role identifies a reanalysis export."""
+    match = _EXPORT_FILENAME.search(PurePosixPath(name).name)
+    if match is None:
+        return None
+    return match.group('role').lower(), match.group('suffix') or ''
+
+
+def _experiment_family(name, suffix):
+    return name[:-len(suffix)-4] + '.csv' if suffix else name
+
+
 def _load_zip(source, expected_runs, progress=None):
     source_name = Path(source).name if isinstance(source, (str, Path)) else getattr(source,'name','NTA.zip')
     try:
@@ -273,7 +298,7 @@ def _load_zip(source, expected_runs, progress=None):
         info = z.infolist()
         if len(info) > 10000 or sum(i.file_size for i in info) > 2_000_000_000:
             raise NTAImportError([f'{source_name}: ZIP exceeds 10,000 members or 2 GB expanded size'])
-        members = {}; recognized = set()
+        members = {}; recognized = {}
         for item in info:
             if item.is_dir(): continue
             path = PurePosixPath(item.filename.replace('\\','/'))
@@ -283,34 +308,46 @@ def _load_zip(source, expected_runs, progress=None):
             key = str(path)
             if key in members: issues.append(f'{source_name}: duplicate ZIP member {key}')
             members[key] = item
-            if path.name.lower().endswith(('experimentsummary.csv','_summary.csv','_particledata.csv','_alltracks.csv')):
-                recognized.add(key)
+            identity = _export_identity(path.name)
+            if identity is not None:
+                recognized[key] = identity
             elif path.suffix.lower() == '.csv':
                 issues.append(f'{source_name}: unrecognized CSV {key}')
-        experiments = sorted(k for k in recognized if k.lower().endswith('experimentsummary.csv'))
+        experiments = sorted(k for k, (role, _) in recognized.items() if role == 'experimentsummary')
+        families = Counter(_experiment_family(k, recognized[k][1]) for k in experiments)
         if not experiments: issues.append(f'{source_name}: missing ExperimentSummary.csv')
-        claimed = set(); plans = []
+        claimed = set(); plans = []; invalid_manifest = False
         # Validate all manifests and inventory before allocating large raw tables.
         for name in experiments:
+            claimed.add(name)
+            export_suffix = recognized[name][1]
             try:
                 summary_bytes = z.read(members[name]); summary = parse_summary(summary_bytes)
                 if expected_runs is not None and len(summary.runs) != expected_runs:
                     raise ValueError(f'Expected {expected_runs} videos; manifest declares {len(summary.runs)}')
                 folder = PurePosixPath(name).parent
-                required = [str(folder / (run + suffix)) for run in summary.runs for suffix in ('_Summary.csv','_ParticleData.csv','_AllTracks.csv')]
-                claimed.add(name)
+                # Each analysis must use its own complete files. Never fall back to
+                # unsuffixed data or pair a different threshold's particle tables.
+                required = [str(folder / (run + role + export_suffix + '.csv'))
+                            for run in summary.runs for role in ('_Summary','_ParticleData','_AllTracks')]
                 for req in required:
                     if req in claimed: issues.append(f'{source_name}: video belongs to multiple packs: {req}')
                     claimed.add(req)
                     if req not in members: issues.append(f'{source_name} / {name}: missing {PurePosixPath(req).name}')
-                plans.append((name, summary, summary_bytes, required))
+                plans.append((name, summary, summary_bytes, required, export_suffix))
             except (ValueError, BadZipFile, RuntimeError, UnicodeError) as exc:
+                invalid_manifest = True
                 issues.append(f'{source_name} / {name}: {exc}')
-        for orphan in sorted(recognized-claimed):
-            issues.append(f'{source_name}: no matching ExperimentSummary entry for {orphan}')
+        # A failed manifest cannot establish that its children are orphans. Report
+        # its actual error first instead of flooding the dialog with false matches.
+        if not invalid_manifest:
+            for orphan in sorted(set(recognized)-claimed):
+                issues.append(f'{source_name}: no matching ExperimentSummary entry for {orphan}')
         if issues: raise NTAImportError(issues)
-        for name, summary, summary_bytes, required in plans:
+        for name, summary, summary_bytes, required, export_suffix in plans:
             videos = []; warnings = []; digest = hashlib.sha256(summary_bytes)
+            if export_suffix:
+                digest.update(b'\0analysis-export\0' + export_suffix.encode('ascii'))
             for i, run in enumerate(summary.runs):
                 if progress: progress(f'{source_name} / {summary.metadata.get("Sample Description", "")} / video {i+1}')
                 run_files = required[i*3:i*3+3]; raw = []
@@ -342,10 +379,15 @@ def _load_zip(source, expected_runs, progress=None):
                         warnings.append(f'Video {i+1}: ParticleData Included={included}, Summary Valid Tracks={valid:g}; retained separately.')
                     videos.append(Video(run,p,t))
                 except (ValueError, BadZipFile, RuntimeError, UnicodeError) as exc:
-                    issues.append(f'{source_name} / {run}: {exc}')
+                    issues.append(f'{source_name} / {name} / {run}: {exc}')
             if len(videos) == len(summary.runs):
-                packs.append(NTAPack(digest.hexdigest()[:24], summary.metadata.get('Sample Description') or PurePosixPath(name).stem,
-                                     f'{source_name} / {name}', summary, videos, warnings))
+                display_name = summary.metadata.get('Sample Description') or PurePosixPath(name).stem
+                if export_suffix or families[_experiment_family(name, export_suffix)] > 1:
+                    threshold = '/'.join(dict.fromkeys(summary.settings['Detection Threshold'][:len(summary.runs)]))
+                    display_name = f'[DT {threshold}; export {export_suffix or "original"}] {display_name}'
+                packs.append(NTAPack(digest.hexdigest()[:24], display_name,
+                                     f'{source_name} / {name}', summary, videos, warnings,
+                                     analysis_suffix=export_suffix))
     if issues: raise NTAImportError(issues)
     return packs
 
@@ -502,6 +544,7 @@ def qc_rows(packs):
     for p in packs:
         for i in range(len(p.videos)):
             r={'sample':p.name,'video':i+1,'included':i not in p.excluded,'source':p.source,
+               'analysis_export_suffix':p.analysis_suffix,
                'diluent_note':p.summary.metadata.get('Diluent',''),'manual_total_dilution':p.dilution,
                'stock_mass_mg_ml':p.mass_mg_ml,'footprint_nm2':p.footprint_nm2}
             for group in ('conditions','settings','results','qc'):

@@ -213,6 +213,29 @@ class HNMRDesktopTests(unittest.TestCase):
         self.assertEqual(saved.metadata['decomposition_styles']['ligand']['width'],3.75)
         self.assertFalse(self.errors)
 
+    def test_ver3_confirmation_component_accounting_and_persistence(self):
+        from copy import deepcopy
+        from test_hnmr_ver3 import fixture
+        from labplotter.hnmr_decomposition import restore_decomposition
+        core,cfg,_,_=fixture()
+        sample=deepcopy(core);sample.uid+='new';sample.name='ANP-C6';sample.real*=1.1;sample.imag*=1.1
+        prepare_spectra([core,sample],cfg);self.tab.add_spectra([core,sample]);self.root.update()
+        q=QuantDialog(self.tab,sample);q.fields['model'].set('model Ver3');self.root.update()
+        self.assertEqual(str(q.forms[2].widgets['broad_aromatic_fwhm_min'].cget('state')),'normal')
+        self.assertEqual(str(q.forms[2].widgets['unassigned_min'].cget('state')),'disabled')
+        q.calculate();self.root.update();r=self.tab.results[sample.uid]
+        self.assertEqual(r.sample_fit.audit['version'],6)
+        self.assertIn('aromatic_broad_integral',r.values)
+        self.tab.tree.selection_set(sample.uid);self.tab._refresh();self.root.update()
+        self.tab.audit();self.root.update()
+        d=HComponentDialog(self.tab,r.sample_fit);self.root.update()
+        self.assertEqual(len(d.tree.get_children()),17)
+        self.assertIn('aromatic_broad',str([d.tree.item(i,'values') for i in d.tree.get_children()]))
+        self.assertIn('height',d.tree['columns']);d.destroy()
+        self.tab.save();saved=self.tab.library.load(sample.uid)
+        self.assertIsNotNone(restore_decomposition(preview_spectrum(saved),saved.metadata['decomposition']))
+        self.assertFalse(self.errors)
+
     def test_new_ver2_and_aromatic_switch_compact_table_and_more_info(self):
         from copy import deepcopy
         from test_hnmr_family import synthetic

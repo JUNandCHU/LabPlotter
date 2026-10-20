@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.11.3 — 2026-10-20
+
+- Accept NanoSight's `Camera Level = Manual settings used` metadata while keeping numeric shutter/gain checks and preserving the original camera text in QC exports.
+- Import numbered reanalysis sets (`ExperimentSummary_1.csv`, `Summary_1.csv`, `ParticleData_1.csv`, `AllTracks_1.csv`, and other numbered suffixes) directly from the original ZIP. Pair every video with the same export suffix, keep analyses separate, and show Detection Threshold/export labels in the sample list and plots. Reanalyses of the same videos are not independent acquisition repeats.
+- Keep complete-pack and cross-file integrity validation. Missing files never fall back to another analysis. Report an invalid experiment summary without generating misleading orphan-file errors for all its children.
+- Apply as a cumulative patch, retaining the delivered 0.11.2 graph behavior, H NMR Ver3, libraries and settings. Validate both user-supplied ZIPs unchanged, including all nine analysis sets in the previously rejected archive.
+
+## 0.11.2 — 2026-10-06
+
+- Restore the pre-0.11.1 graph defaults, automatic axis-title padding and canvas-sized copy/export. Remove the margin controls, forced title coordinates and 8.5-inch export enlargement introduced in 0.11.1; the enlargement made fonts and lines appear smaller when figures were pasted at the same PowerPoint size.
+- For fixed-ratio H NMR graphs, share the space required by the legacy automatic layouts of the loaded spectra. Measure the group before the first copy so switching particles or selection order does not change the inner axes rectangle. Existing font sizes, line widths, data, fits and zoom behavior remain intact; no additional settings are required.
+- Contain overflowing axis-title ends in small previews, retaining automatic tick/title padding. Finish pending canvas resizing before copying. Verify legacy single-sample pixels, sample order, high-DPI title bounds, current-view PNG/SVG size and unchanged visible curves.
+- Apply as a cumulative patch over 0.10.10, 0.11.0 or 0.11.1, then restart. Keep H NMR Ver3 and NTA, existing libraries and analysis settings. For a figure series, load the relevant samples together and keep the same graph-panel size and graph settings while copying.
+
+## 0.11.1 — 2026-10-01
+
+- Fix publication graphs having different inner axis sizes despite identical width:height settings. Fixed-ratio graphs now use sample-independent margins and aligned axis titles by default. Add editable percentage margins and an explicit automatic-layout opt-out in Graph settings.
+- Use an 8.5-inch long edge for fixed-frame copy/PNG/SVG/PDF exports, independent of the preview window. Retain the current zoom, visible fitted layers, colors and raw values. Route toolbar Save through the same exporter, disable data-dependent cropping and restore preview geometry even if saving fails.
+- Apply the shared frame to desktop plots, H NMR current-view exports and web figure builders. Preserve equal-unit XY trajectory aspect. Add regression coverage for integer/decimal/scientific ticks, sample switching, window resizing, constrained layout, title alignment, export formats, failed saves and UI option parsing.
+- Include the previously delivered 0.10.10 H NMR Ver3 alongside 0.11.0 NTA. Retain libraries and existing analysis settings; this graph fix does not change fitting, integration or quantitation equations.
+
 ## 0.11.0 — 2026-10-01
 
 - Add desktop and browser NTA workspaces with multi-ZIP atomic import, declared-video manifests, complete six-distribution/percentile validation, cross-file consistency and raw track integrity checks. Report missing files or invalid content before adding data; support nested packs and deduplicate identical imports.

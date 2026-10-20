@@ -45,7 +45,7 @@ from .parsers import (
 )
 from .plot_settings import AnnotationWindow, PlotSettingsWindow
 from .plotting import (AnnotationSpec, PlotOptions, apply_origin_style, figure_png_bytes, font_family_for_text,
-                       SERIES_PALETTE, save_plot_figure, validate_figure_ratio)
+                       SERIES_PALETTE, save_plot_figure, validate_figure_ratio, layout_plot_group)
 from .processing import ftir_peak_indices, mean_curve, process_ftir
 from .storage import FormatProfileStore, ParticleLibrary, default_particle_label
 from .tem import (
@@ -237,6 +237,7 @@ class PlotPane(ttk.Frame):
     ):
         super().__init__(parent)
         self.draw_callback = draw_callback
+        self.layout_peers = None
         self.options = options
         self.default_options = deepcopy(options)
         self.compact = compact
@@ -355,11 +356,17 @@ class PlotPane(ttk.Frame):
     def _fit_figure(self):
         self._layout_job = None
         widget = self.canvas.get_tk_widget()
+        if widget.winfo_width() < 2 or widget.winfo_height() < 2:
+            return
         # Tk's DPI change can otherwise leave the renderer larger than its image.
         self.figure.set_size_inches(widget.winfo_width()/self.figure.dpi,
                                     widget.winfo_height()/self.figure.dpi, forward=False)
-        self.figure.tight_layout()
+        self._layout_figure()
         self.canvas.draw_idle()
+
+    def _layout_figure(self):
+        peers = self.layout_peers() if self.options.figure_ratio is not None and self.layout_peers else ()
+        layout_plot_group(self.figure, self.options, peers)
 
     def _cancel_layout(self, event):
         if event.widget is self:
@@ -449,7 +456,7 @@ class PlotPane(ttk.Frame):
                 self.settings_window.curve_editor.refresh()
             apply_origin_style(self.figure, self.axis, self.options)
             self._create_legend()
-            self.figure.tight_layout()
+            self._layout_figure()
             self._render_annotations()
             self._resize_canvas()
             self.canvas.draw_idle()
@@ -641,6 +648,13 @@ class PlotPane(ttk.Frame):
             self.annotation_artists.append(artist)
 
     def _with_annotation_visibility(self, visible: bool, callback: Callable):
+        # Finish the existing resize before copying; otherwise a quick copy
+        # can capture the previous canvas geometry during the 80 ms debounce.
+        if self._layout_job is not None:
+            self.update_idletasks()
+            if self._layout_job is not None:
+                self.after_cancel(self._layout_job)
+                self._fit_figure()
         if self.export_current_view:
             self.canvas.draw()
             return callback()

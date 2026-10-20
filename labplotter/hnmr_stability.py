@@ -64,7 +64,7 @@ def phase_sensitivity(sample, reference=None, *, settings=None, phase_step=2.,
                           stored.get('shift',0.),stored.get('phase1'))
         scan_model = model
         phase0,phase1 = base.audit['auto_phase0_deg'],base.audit['auto_phase1_deg']
-        if model.model == 'broad_core3':
+        if model.model in ('broad_core3', 'broad_aromatic3'):
             # Perturb the displayed joint-fit phase; keep every scenario fixed,
             # including zero. Otherwise only zero would re-optimize its phase.
             from .hnmr_decomposition import restore_decomposition
@@ -85,7 +85,7 @@ def phase_sensitivity(sample, reference=None, *, settings=None, phase_step=2.,
                          'fit_R2':fit.audit['fit_R2'],'assignment_ambiguous':fit.audit.get('assignment_ambiguous',False),
                          'warnings':fit.warnings})
     report={'phase_step_deg':phase_step,'preprocessing':asdict(cfg),'decomposition':asdict(model),'rows':rows,
-            'note':'Ver2 is anchored to its nominal joint-fit phase with phase refinement disabled in every scenario. PH0 perturbations with fixed PH1, recomputed baseline and fresh component fits; no normalization, clipping, or forced sample ordering. Sensitivity scenarios are not confidence intervals.'}
+            'note':'Ver2/Ver3 are anchored to its nominal joint-fit phase with phase refinement disabled in every scenario. PH0 perturbations with fixed PH1, recomputed baseline and fresh component fits; no normalization, clipping, or forced sample ordering. Sensitivity scenarios are not confidence intervals.'}
     if len(spectra)==2:
         a=[r for r in rows if r['uid']==sample.uid];b=[r for r in rows if r['uid']==reference.uid]
         def comparison(key):

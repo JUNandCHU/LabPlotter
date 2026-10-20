@@ -1,4 +1,4 @@
-"""Ver2: complex MAS families with a broad, explicitly unassigned component.
+"""Complex MAS families: Ver2 unassigned, Ver3 broad aromatic.
 
 This ports the ANP broad_core3 investigation. It does not use carbon area ratios,
 expected sample ordering, or a pristine template to constrain the fitted areas.
@@ -53,7 +53,7 @@ def restore_family(p, audit):
     settings = DecompositionSettings(**audit['settings']).validate()
     x, _ = _domain(p, settings)
     y = corrected_complex(p, audit, x).real
-    curves = {name: np.zeros_like(x) for name in FAMILIES}
+    curves = {name: np.zeros_like(x) for name in audit['areas']}
     for line in audit['lines']:
         curves[line['family']] += profile(x, *line['parameters'])
     total = sum(curves.values())
@@ -68,6 +68,10 @@ def fit_family(p, settings):
 
 def _fit_family(p, s):
     _domain(p, s)  # Validate the integration domain independently of the fit window.
+    ver3 = s.model == 'broad_aromatic3'
+    families = ('aliphatic','aromatic','aromatic') if ver3 else FAMILIES
+    components = ('aliphatic','aromatic_narrow','aromatic_broad') if ver3 else FAMILIES
+    output_families = tuple(dict.fromkeys(families))
     orders = [0]+[n for k in range(1, s.sideband_order+1) for n in (-k,k)] if s.sidebands else [0]
     spacing = s.mas_hz/s.proton_mhz if s.mas_hz else s.sideband_spacing
     nlines = len(FAMILIES)*len(orders)
@@ -75,15 +79,19 @@ def _fit_family(p, s):
                     s.unassigned_min,s.unassigned_fwhm_min,0], float)
     high = np.array([s.aliphatic_max,s.fwhm_max,1, s.aromatic_max,s.fwhm_max,1,
                      s.unassigned_max,s.unassigned_fwhm_max,1], float)
+    if ver3:
+        low[6:9] = [s.aromatic_min,s.broad_aromatic_fwhm_min,0]
+        high[6:9] = [s.aromatic_max,s.broad_aromatic_fwhm_max,1]
     fixed = {}
     for i, fraction in enumerate((s.aliphatic_gaussian_fraction, s.aromatic_gaussian_fraction, None)):
         if s.line_shape != 'pseudo_voigt': fixed[3*i+2] = float(s.line_shape == 'lorentzian')
         elif fraction is not None: fixed[3*i+2] = 1-fraction
-    free = np.array([i for i in range(9) if i not in fixed])
+    free = np.array([i for i in range(9) if i not in fixed and not (ver3 and i == 6)])
 
     def expand(v):
         out = np.empty(9); out[free] = v
         for i, value in fixed.items(): out[i] = value
+        if ver3: out[6] = out[3]  # Narrow/broad aromatic share one center.
         return out.reshape(3,3)
 
     def matrix(x, rows, complex_=False):
@@ -113,12 +121,14 @@ def _fit_family(p, s):
         if i == 0: start = np.array([1,5,.6,7,8,.2,5,25,.8])
         fit = solve(lambda v: seed_eval(v)[0], start[free], low[free], high[free],500,1e-10)
         if np.isfinite(fit.cost): seeds.append(fit)
-    if not seeds: raise ValueError('Ver2 did not find a finite fit. Review data and bounds.')
+    if not seeds: raise ValueError('Complex family model did not find a finite fit. Review data and bounds.')
     seed = min(seeds,key=lambda f:f.cost)
     cfg = p.audit.get('settings', {})
     pivot = float(p.audit.get('phase_pivot_ppm',(p.x[0]+p.x[-1])/2))
     span = float(cfg.get('ppm_max',p.x[-1])-cfg.get('ppm_min',p.x[0]))
     warnings = ['Ver2 chemical assignments remain model-dependent. The broad unassigned area is excluded from both aliphatic and aromatic coverage terms. High fit R2 does not validate the partition.']
+    if ver3:
+        warnings = ['Ver3 assumes the broad profile is aromatic and shares its center with the narrow aromatic profile. This is an empirical chemical assignment, not proof from fit quality; exchangeable H and baseline/phase uncertainty remain. No expected sample ordering or 13C ratio is imposed.']
     joint = (p.raw_x is not None and p.raw_complex is not None
              and np.any(np.abs(p.raw_complex.imag) > 0) and not cfg.get('gaussian_fwhm',0))
     if not joint:
@@ -137,10 +147,10 @@ def _fit_family(p, s):
     if joint:
         lo_x, hi_x = max(s.complex_fit_min,p.x[0]), min(s.complex_fit_max,p.x[-1])
         if lo_x > s.fit_min or hi_x < s.fit_max:
-            raise ValueError('Ver2 complex fitting window must enclose the component integration range.')
+            raise ValueError('Complex family fitting window must enclose the component integration range.')
         ids = np.flatnonzero((p.raw_x>=lo_x)&(p.raw_x<=hi_x))[::4]
         x, z = p.raw_x[ids], p.raw_complex[ids]/scale
-        if len(x) < 40: raise ValueError('Ver2 complex fitting needs at least 40 sampled points.')
+        if len(x) < 40: raise ValueError('Complex family fitting needs at least 40 sampled points.')
         fit_window = [lo_x,hi_x]
         t = (x-pivot)/span
         background_columns = np.column_stack((np.ones(len(x)),t,1j*np.ones(len(x)),1j*t))
@@ -148,10 +158,21 @@ def _fit_family(p, s):
         low2 = np.r_[low[free],-s.joint_phase0_limit,-s.joint_phase1_limit] if refine_phase else low[free]
         high2 = np.r_[high[free],s.joint_phase0_limit,s.joint_phase1_limit] if refine_phase else high[free]
 
+        # Ver3: project out the unconstrained background, then solve NNLS.
+        bgmat = np.r_[background_columns.real,background_columns.imag]
+        qbg = np.linalg.qr(bgmat,mode='reduced')[0] if background else np.empty((len(target),0))
+        projected_target = target-qbg@(qbg.T@target)
+
         def evaluate(v):
             ph0,ph1 = v[-2:] if refine_phase else (p0,p1)
             r = expand(v[:-2] if refine_phase else v)
             m = matrix(x,r,True)*np.exp(-1j*np.deg2rad(ph0+ph1*t))[:,None]
+            if ver3:
+                m = np.r_[m.real,m.imag]
+                heights,_ = nnls(m-qbg@(qbg.T@m),projected_target,maxiter=1000)
+                bgcoeff = np.linalg.lstsq(bgmat,target-m@heights,rcond=None)[0] if background else np.empty(0)
+                residual = m@heights-target+(bgmat@bgcoeff if background else 0)
+                return residual,np.r_[heights,bgcoeff]
             if background: m = np.column_stack((m,background_columns))
             m = np.r_[m.real,m.imag]
             bounds = (np.r_[np.zeros(nlines),[-np.inf]*4] if background else np.zeros(nlines), np.inf)
@@ -159,13 +180,23 @@ def _fit_family(p, s):
             return m@h-target,h
 
         rng = np.random.default_rng(123); fits = []
-        for i in range(3):
+        for i in range(8 if ver3 else 3):
             start = seed.x.copy()
             if i: start *= .85+.3*rng.random(len(start))
-            if refine_phase: start = np.r_[start,p0,p1]
-            f = solve(lambda v:evaluate(v)[0],start,low2,high2,250,1e-9)
+            if ver3 and i >= 2: start = low[free]+(high[free]-low[free])*rng.uniform(.12,.88,len(free))
+            if ver3 and i in (4,5):
+                # Cover Lorentz-rich solutions with a relatively narrow broad
+                # profile, as well as the Gaussian-rich real-spectrum seed.
+                candidate=low+.5*(high-low)
+                candidate[7]=low[7]+.1*(high[7]-low[7])
+                candidate[[2,5,8]]=.9
+                start=candidate[free]
+            if refine_phase:
+                start = np.r_[start,p0,p1]
+                if ver3 and i == 5: start[-2:]=[0.,0.]
+            f = solve(lambda v:evaluate(v)[0],start,low2,high2,350 if ver3 else 250,1e-9)
             if np.isfinite(f.cost): fits.append(f)
-        if not fits: raise ValueError('Ver2 complex fitting did not find a finite solution.')
+        if not fits: raise ValueError('Complex family fitting did not find a finite solution.')
         best = min(fits,key=lambda f:f.cost)
         res,h = evaluate(best.x); rows = expand(best.x[:-2] if refine_phase else best.x)
         heights = h[:nlines]
@@ -178,20 +209,22 @@ def _fit_family(p, s):
         complex_r2 = float(1-res@res/denom) if denom else None
 
     def line_areas(shape_rows, hh):
-        return {name:float(sum(hh[i*len(orders)+j]*scale*profile_area(s.fit_min,s.fit_max,1,mu+spacing*n,
-                        w*(s.sideband_width_scale if n else 1.),eta) for j,n in enumerate(orders)))
-                for i,(name,(mu,w,eta)) in enumerate(zip(FAMILIES,shape_rows))}
+        out = dict.fromkeys(output_families,0.)
+        for i,(name,(mu,w,eta)) in enumerate(zip(families,shape_rows)):
+            out[name] += float(sum(hh[i*len(orders)+j]*scale*profile_area(s.fit_min,s.fit_max,1,mu+spacing*n,
+                                  w*(s.sideband_width_scale if n else 1.),eta) for j,n in enumerate(orders)))
+        return out
 
     areas = line_areas(rows,heights)
     lines = []; params = {}
-    for i,(name,(mu,w,eta)) in enumerate(zip(FAMILIES,rows)):
-        params[name] = [float(heights[i*len(orders)]*scale),float(mu),float(w),float(eta)]
+    for i,(name,(mu,w,eta)) in enumerate(zip(families,rows)):
+        params[components[i]] = [float(heights[i*len(orders)]*scale),float(mu),float(w),float(eta)]
         for j,n in enumerate(orders):
             height = float(heights[i*len(orders)+j]*scale)
             width = float(w*(s.sideband_width_scale if n else 1.))
             pars = [height,float(mu+n*spacing),width,float(eta)]
             full = height*width*((1-eta)*np.sqrt(np.pi)/(2*np.sqrt(np.log(2)))+eta*np.pi/2)
-            lines.append({'family':name,'order':int(n),'parameters':pars,
+            lines.append({'family':name,'component':components[i],'order':int(n),'parameters':pars,
                           'area':profile_area(s.fit_min,s.fit_max,*pars),'full_profile_area':float(full)})
     spread = {}; starts = []
     for f in fits:
@@ -200,23 +233,23 @@ def _fit_family(p, s):
         else:
             _,h = seed_eval(f.x); shapes = expand(f.x)
         starts.append({'relative_SSE':float(f.cost/max(best.cost,1e-30)), 'converged':bool(f.success), 'areas':line_areas(shapes,h)})
-    for name in FAMILIES:
+    for name in output_families:
         near = [r['areas'][name] for r,f in zip(starts,fits) if f.cost <= best.cost+max(.01*best.cost,1e-14)]
         spread[name] = max(near)-min(near)
         if spread[name] > max(areas[name],1e-30)*.1:
             warnings.append(name+': near-equivalent starts differ by >10% in area.')
     bound_hits = []
     for i,v in enumerate(rows.ravel()):
-        if i in fixed: continue
+        if i in fixed or (ver3 and i == 6): continue
         if min(v-low[i],high[i]-v) < .002*(high[i]-low[i]):
-            label = FAMILIES[i//3]+': '+('center','FWHM','Lorentzian fraction')[i%3]
+            label = components[i//3]+': '+('center','FWHM','Lorentzian fraction')[i%3]
             bound_hits.append(label)
             warnings.append(label+' is at a fitting bound; review area sensitivity.')
     if not best.success: warnings.append('Optimizer reached its evaluation limit; inspect convergence before interpreting component areas.')
     breakdown = {name:{'central':sum(v['area'] for v in lines if v['family']==name and v['order']==0),
-                       'sidebands':sum(v['area'] for v in lines if v['family']==name and v['order']!=0)} for name in FAMILIES}
-    full_areas = {name:sum(v['full_profile_area'] for v in lines if v['family']==name) for name in FAMILIES}
-    audit = {'version':5,'model_name':'broad_core3','settings':asdict(s),'processed_sha256':fingerprint(p),
+                       'sidebands':sum(v['area'] for v in lines if v['family']==name and v['order']!=0)} for name in output_families}
+    full_areas = {name:sum(v['full_profile_area'] for v in lines if v['family']==name) for name in output_families}
+    audit = {'version':6 if ver3 else 5,'model_name':s.model,'settings':asdict(s),'processed_sha256':fingerprint(p),
              'complex_sha256':complex_fingerprint(p),'parameters':params,'lines':lines,'areas':areas,
              'area_breakdown':breakdown,'full_profile_areas':full_areas,
              'area_domain_ppm':[s.fit_min,s.fit_max], 'fit_window_ppm':fit_window,
@@ -228,6 +261,10 @@ def _fit_family(p, s):
              'converged_starts':sum(bool(f.success) for f in fits),'fit_points':len(x) if joint else len(xseed),
              'warnings':warnings,'assignment_ambiguous':bool(bound_hits or phase_hits or not best.success or any(spread[k]>.1*max(areas[k],1e-30) for k in areas)),
              'assignment_note':'Broad unassigned signal is not assumed aliphatic or aromatic. No 13C ratio or expected sample ordering is imposed.'}
+    if ver3:
+        audit.update(subareas={name:sum(v['area'] for v in lines if v['component']==name) for name in components},
+            area_method='Analytic finite-domain sum including MAS orders. Aromatic area = narrow + broad aromatic profiles; no unassigned component.',
+            assignment_note='Broad aromatic assignment is an explicit model assumption. Narrow/broad aromatic centers are tied; widths, G/L fractions and nonnegative heights are independent. No 13C ratio or expected coverage/sample ordering is imposed.')
     result = restore_family(p,audit)
     y,res = result.observed,result.residual
     denom = float(np.sum((y-y.mean())**2))
